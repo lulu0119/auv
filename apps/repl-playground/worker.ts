@@ -12,14 +12,16 @@ export default {
     if (url.pathname !== '/playground' && !url.pathname.startsWith('/playground/'))
       return new Response('Not found', { status: 404 })
     if (url.pathname === '/playground' || url.pathname === '/playground/') {
-      url.pathname = '/index.html'
+      // NOTE: fetch `/` rather than `/index.html`; the asset layer
+      // canonicalizes the latter with a redirect.
+      url.pathname = '/'
       return env.ASSETS.fetch(new Request(url.href, request))
     }
     url.pathname = url.pathname.slice('/playground'.length)
     const asset = await env.ASSETS.fetch(new Request(url.href, request))
     // SPA fallback: extensionless routes (such as the OAuth callback) load the app.
     if (asset.status === 404 && request.method === 'GET') {
-      url.pathname = '/index.html'
+      url.pathname = '/'
       return env.ASSETS.fetch(new Request(url.href, request))
     }
     return asset
