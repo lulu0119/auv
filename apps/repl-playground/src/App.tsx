@@ -1,9 +1,10 @@
 import { Tooltip } from '@base-ui/react/tooltip'
-import { useEffect } from 'react'
-import { Group, Panel } from 'react-resizable-panels'
+import { useEffect, useState } from 'react'
+import { Group, Panel, usePanelRef } from 'react-resizable-panels'
 
 import { PanelFrame } from './components/PanelFrame'
 import { ResizeHandle } from './components/ResizeHandle'
+import { AgentTab } from './features/agent/AgentTab'
 import { DesktopCanvas } from './features/desktop/DesktopCanvas'
 import { restoreDevices } from './features/device/devices'
 import { CodeEditor } from './features/editor/CodeEditor'
@@ -17,6 +18,15 @@ import { StatusBar } from './features/workbench/StatusBar'
 import { session } from './runtime/session'
 
 export function App() {
+  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const inspectorRef = usePanelRef()
+  const toggleInspector = () => {
+    if (inspectorOpen)
+      inspectorRef.current?.collapse()
+    else
+      inspectorRef.current?.expand()
+  }
+
   useEffect(() => {
     // Debugger keys work regardless of focus (the editor may not be focused
     // after clicking a toolbar button).
@@ -43,26 +53,39 @@ export function App() {
     <Tooltip.Provider delay={300}>
       <div className="flex flex-col h-full">
         <div className="flex flex-1 min-h-0">
-          <ActivityBar />
+          <ActivityBar inspectorOpen={inspectorOpen} onToggleInspector={toggleInspector} />
           <div className="flex flex-1 flex-col min-w-0">
             <div className="flex-1 min-h-0">
               <Group orientation="vertical">
                 <Panel defaultSize="70%" minSize="30%">
                   <Group orientation="horizontal">
-                    <Panel defaultSize="38%" minSize="15%">
+                    <Panel defaultSize="32%" minSize="15%">
                       <PanelFrame title="Desktop">
                         <DesktopCanvas />
                       </PanelFrame>
                     </Panel>
                     <ResizeHandle orientation="horizontal" />
-                    <Panel defaultSize="40%" minSize="20%">
+                    <Panel defaultSize="30%" minSize="15%">
                       <PanelFrame title="Script">
                         <CodeEditor />
                         <DebugBar />
                       </PanelFrame>
                     </Panel>
                     <ResizeHandle orientation="horizontal" />
-                    <Panel defaultSize="22%" minSize="12%">
+                    <Panel defaultSize="22%" minSize="15%">
+                      <PanelFrame title="Agent">
+                        <AgentTab />
+                      </PanelFrame>
+                    </Panel>
+                    <ResizeHandle orientation="horizontal" />
+                    <Panel
+                      collapsedSize={0}
+                      collapsible
+                      defaultSize="16%"
+                      minSize="10%"
+                      onResize={size => setInspectorOpen(size.asPercentage > 0)}
+                      panelRef={inspectorRef}
+                    >
                       <Inspector />
                     </Panel>
                   </Group>

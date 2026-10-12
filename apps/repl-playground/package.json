@@ -14,6 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
+    "@assistant-ui/react": "catalog:",
     "@auv-js/sdk": "workspace:*",
     "@base-ui/react": "catalog:",
     "@bufbuild/protobuf": "catalog:",
@@ -25,12 +27,16 @@
     "@codemirror/search": "catalog:",
     "@codemirror/state": "catalog:",
     "@codemirror/view": "catalog:",
+    "@hafbit/react-acp": "catalog:",
     "@lezer/highlight": "catalog:",
     "@moeru/eventa": "catalog:",
+    "@mukae/client": "catalog:",
+    "@mukae/contract": "catalog:",
     "@typescript/vfs": "catalog:",
     "acorn": "catalog:",
     "birpc": "catalog:",
     "magic-string": "catalog:",
+    "oauth4webapi": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",
@@ -38,6 +44,7 @@
     "thumbhash": "catalog:",
     "ts-blank-space": "catalog:",
     "typescript": "catalog:",
+    "valibot": "catalog:",
     "zustand": "catalog:"
   },
   "devDependencies": {

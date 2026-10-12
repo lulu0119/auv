@@ -43,6 +43,14 @@ controlled desktop.
   changes on input, so everything works without a device. It is a mock Runner
   (`createMockTransport` from `@auv-js/sdk`): it answers the same Runner RPCs
   as a device, so scripts, the timeline and replay behave the same on it.
+- **Agent tab** (next to Script): sign in with Mukae, open an agent on one of
+  your machines, and let it write the scripts. The agent only reaches the
+  sandbox through code blocks you apply to the editor; its own local tools
+  need your per-call approval and cannot see the mock desktop. The toolbar
+  runs the editor, resets the sandbox, and sends finished-run evidence back
+  to the agent, closing the loop. The session is never persisted: a new
+  connection spawns a fresh agent process, and disconnecting kills it.
+  Set `VITE_MUKAE_URL` at build time when the relay is not local.
 
 ## Quick start
 
@@ -308,6 +316,16 @@ These are known and intentionally deferred; each is marked in code.
 - **Not a sandbox.** The exec worker shares the page origin, and the paired
   Device credentials are stored in `localStorage`. Run only your own scripts and
   keep the REPL on a local origin.
+- **Agent tab**: sign-in and tickets come from `@mukae/client` (pinned to a
+  Mukae preview publish, see `NOTICE(preview-exotic-subdeps)` in
+  `pnpm-workspace.yaml`), but the thread UI is the playground's own over
+  `@hafbit/react-acp` hooks. Only the OAuth callback address is adapted
+  (`account.tsx` rebases it under `/playground/`). Sessions are single
+  and ephemeral (no directory picker, no session list, old sessions linger in
+  the host agent process). Agent browser-auth (`auth-required`) has no UI yet.
+  Applying code and running always need a human click; there is no auto-run.
+  Double dials (StrictMode, HMR) share one ticket: the relay lets an infant
+  socket retake it (mukae ADR 0011).
 - `const` at the top level becomes reassignable across cells (same as
   `node:repl`), and a line starting with `(` or `[` continues the previous
   statement unless it ends with `;`.

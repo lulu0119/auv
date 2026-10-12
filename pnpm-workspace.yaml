@@ -27,6 +27,13 @@ minimumReleaseAgeExclude:
 
 shellEmulator: true
 
+# NOTICE(preview-exotic-subdeps): the Agent tab drinks from Mukae's pkg.pr.new
+# preview tarballs, whose client->contract edge is a URL. pnpm 11 blocks that
+# as an exotic subdependency by default. This flag reopens it for the whole
+# workspace. Remove it (and the preview pins below) once `@mukae/contract`
+# and `@mukae/client` publish to the npm registry.
+blockExoticSubdeps: false
+
 trustPolicy: no-downgrade
 
 trustPolicyExclude:
@@ -44,11 +51,13 @@ packages:
   - 'proto/sdk/js'
 
 catalog:
+  '@agentclientprotocol/sdk': ^1.8.0
   '@alint-js/agent-apeira': '^0.3.0'
   '@alint-js/cli': ^0.3.0
   '@alint-js/core': ^0.3.0
   '@alint-js/plugin': '^0.3.0'
   '@alint-js/tools-fs': '^0.3.0'
+  '@assistant-ui/react': ^0.15.26
   '@base-ui/react': ^1.8.0
   '@bufbuild/buf': 1.72.0
   '@bufbuild/protobuf': 2.13.0
@@ -67,12 +76,17 @@ catalog:
   '@eslint-react/eslint-plugin': ^3.0.0
   '@grpc/grpc-js': 1.14.4
   '@guiiai/logg': ^1.2.11
+  '@hafbit/react-acp': ^0.1.9
   '@hey-api/openapi-ts': ^0.99.0
   '@iconify-json/ph': ^1.2.2
   '@lezer/highlight': ^1.2.5
   '@moeru/eslint-config': ^0.1.0-beta.20
   '@moeru/eventa': ^1.0.2
   '@moeru/std': 0.1.0-beta.20
+  # NOTICE(preview-exotic-subdeps): pinned to one Mukae preview publish; both
+  # URLs must move together. Drop for registry versions when published.
+  '@mukae/client': https://pkg.pr.new/lulu0119/mukae/@mukae/client@57aebe3
+  '@mukae/contract': https://pkg.pr.new/lulu0119/mukae/@mukae/contract@57aebe3
   '@napi-rs/cli': ^3.8.6
   '@pnpm/find-workspace-dir': 1000.1.5
   '@types/node': ^26.0.1
@@ -98,6 +112,7 @@ catalog:
   eslint-plugin-slop: 0.1.3
   magic-string: ^1.4.2
   nano-staged: ^1.0.2
+  oauth4webapi: ^3.8.8
   oxlint: ^1.78.0
   playwright: 1.62.1
   publint: ^0.3.23
@@ -119,6 +134,7 @@ catalog:
   typescript: ^6.0.3
   unocss: ^66.10.5
   unrun: ^0.3.1
+  valibot: ^1.5.0
   vite: ^8.1.0
   zustand: ^5.0.15
 
