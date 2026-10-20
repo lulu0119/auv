@@ -5,7 +5,7 @@ import type { Backend, RunBackend } from '../backend/types'
 import type { Rect } from '../script-api/api'
 import type { BindSite, StepSite } from '../stepper/compile'
 import type { BindEvent, Mark, StepEvent } from '../store'
-import type { ExecWorkerApi, HostApi, LanguageWorkerApi, ResumeMode } from './protocol'
+import type { CodeModeState, ExecWorkerApi, HostApi, LanguageWorkerApi, ResumeMode, RunOutcome } from './protocol'
 
 import { camelCaseName } from '@auv-js/sdk'
 import { fromBinary, fromJsonString } from '@bufbuild/protobuf'
@@ -31,10 +31,12 @@ export const language: BirpcReturn<LanguageWorkerApi, object> = createBirpc<Lang
 })())
 
 export interface RunOptions {
+  codemode?: { store: Record<string, unknown>, timeoutMs: number }
   /** Pause at the first statement. */
   mode: 'run' | 'step'
   /** Answer device calls from the previous live run's recording. */
   replay?: boolean
+  signal?: AbortSignal
   source: string
   /** Editor line where `source` starts. */
   startLine: number
@@ -73,8 +75,9 @@ class EventBatch {
 }
 
 /**
- * Owns the execution worker and turns its hook events into the run's event
- * log. One cell runs at a time; top-level names persist until `reset()`.
+ * Owns the editor worker and temporary codemode workers, and turns their
+ * hook events into the run's event log. One cell runs at a time; editor
+ * top-level names persist until `reset()`.
  */
 class ExecSession {
   get running(): boolean {
@@ -85,17 +88,21 @@ class ExecSession {
   #bindHits: number[] = []
   #binds: BindSite[] = []
   #cellId = 0
+  #codemode = false
+  #codeOutput: CodeModeState['content'] = []
   #exec!: BirpcReturn<ExecWorkerApi, HostApi>
   #lastLine: null | number = null
   #lineHits = new Map<number, number>()
   #liveTimer?: number
   #recording?: Recording
+  #runAbort?: AbortController
   #runBackend: null | RunBackend = null
   #running = false
+
+  #sdkPort?: MessagePort
   #seq = 0
   #steps: StepSite[] = []
   #timer?: StepTimer
-
   #worker?: Worker
 
   constructor() {
@@ -126,6 +133,10 @@ class ExecSession {
 
   /** Terminates the worker (also escapes infinite sync loops) and clears REPL state. */
   reset(): void {
+    if (this.#codemode) {
+      this.stop()
+      return
+    }
     this.#worker?.terminate()
     this.#running = false
     actions.resetSession()
@@ -139,13 +150,27 @@ class ExecSession {
     this.#exec.resume(mode)
   }
 
-  async run(options: RunOptions): Promise<void> {
+  async run(options: RunOptions): Promise<RunOutcome> {
     if (this.#running)
-      return
+      return { message: 'Another playground execution is running.', status: 'error' }
     const live = usePlayground.getState().backend
     if (options.replay && !this.#recording)
-      return
+      return { message: 'No recording is available.', status: 'error' }
+    if (options.signal?.aborted)
+      return { status: 'stopped' }
     this.#running = true
+    this.#codemode = options.codemode !== undefined
+    this.#codeOutput = []
+    const editor = { exec: this.#exec, port: this.#sdkPort, worker: this.#worker }
+    if (options.codemode)
+      this.#spawn()
+    const abort = new AbortController()
+    this.#runAbort = abort
+    const cancel = () => this.stop()
+    options.signal?.addEventListener('abort', cancel, { once: true })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (options.codemode)
+      timer = setTimeout(cancel, options.codemode.timeoutMs)
     const recorder = !options.replay && live ? new RecordingBackend(live) : undefined
     this.#runBackend = options.replay ? new ReplayBackend(this.#recording!) : recorder ?? live
     this.#seq = 0
@@ -153,27 +178,38 @@ class ExecSession {
     this.#lastLine = null
     actions.beginRun(options.replay ? 'replay' : 'live')
     try {
-      const compiled = await language.compile({ cellId: ++this.#cellId, source: options.source, startLine: options.startLine })
+      const compiled = await language.compile({ allowReturn: options.codemode !== undefined, cellId: ++this.#cellId, source: options.source, startLine: options.startLine })
       if (!compiled.ok) {
         actions.patchRun({ endedAt: Date.now(), errorLine: compiled.line, errorMessage: compiled.message, status: 'error' })
-        return
+        return { line: compiled.line, message: compiled.message, status: 'error' }
       }
       this.#steps = compiled.steps
       this.#binds = compiled.binds
       this.#bindHits = Array.from<number>({ length: compiled.binds.length }).fill(0)
       this.#timer = new StepTimer(compiled.steps)
+      abort.signal.throwIfAborted()
       const runId = await this.#runBackend?.beginRun()
       actions.patchRun({ runId, status: 'running' })
-      const outcome = await this.#exec.run({
+      const executing = this.#exec.run({
         binds: compiled.binds,
         breakpoints: usePlayground.getState().breakpoints,
         code: compiled.code,
+        codemode: options.codemode,
+        executionId: this.#cellId,
         hoisted: compiled.hoisted,
         mode: options.mode,
         prelude: compiled.prelude,
         sdkRoute: this.#runBackend?.sdk().route,
         steps: compiled.steps,
       })
+      const outcome = options.codemode
+        ? await Promise.race([executing, new Promise<RunOutcome>((resolve) => {
+            const stopped = () => resolve({ codemode: { content: [...this.#codeOutput], store: options.codemode!.store }, status: 'stopped' })
+            if (abort.signal.aborted)
+              stopped()
+            else abort.signal.addEventListener('abort', stopped, { once: true })
+          })])
+        : await executing
       this.#timer.finish(performance.timeOrigin + performance.now())
       this.#batch.flush()
       const timings = this.#timer.snapshot()
@@ -191,14 +227,40 @@ class ExecSession {
         this.#log('error', [outcome.message], outcome.line ?? null)
       }
       usePlayground.setState({ timings })
+      // Run-control cleanup cannot replace the direct script result.
       await this.#runBackend?.endRun(outcome.status === 'ok' ? 'succeeded' : outcome.status === 'stopped' ? 'canceled' : 'failed')
+        .catch(error => this.#log('warn', [`Closing the AUV Run failed: ${error instanceof Error ? error.message : String(error)}`], null))
       if (recorder) {
         this.#recording = recorder.recording()
         usePlayground.setState({ hasRecording: true })
       }
       void this.refreshAxTree().catch(() => {})
+      return outcome
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      actions.patchRun({ currentLine: null, endedAt: Date.now(), errorMessage: message, status: 'error' })
+      await this.#runBackend?.endRun('failed').catch(() => {})
+      if (recorder) {
+        this.#recording = recorder.recording()
+        usePlayground.setState({ hasRecording: true })
+      }
+      return { codemode: options.codemode && { content: [...this.#codeOutput], store: options.codemode.store }, message, status: 'error' }
     }
     finally {
+      abort.abort()
+      clearTimeout(timer)
+      options.signal?.removeEventListener('abort', cancel)
+      if (options.codemode) {
+        this.#worker?.terminate()
+        this.#sdkPort?.close()
+        this.#exec.$close()
+        this.#exec = editor.exec
+        this.#worker = editor.worker
+        this.#sdkPort = editor.port
+      }
+      this.#runAbort = undefined
+      this.#codemode = false
       this.#running = false
     }
   }
@@ -232,6 +294,11 @@ class ExecSession {
   }
 
   stop(): void {
+    if (this.#codemode) {
+      this.#runAbort?.abort()
+      this.#worker?.terminate()
+      return
+    }
     this.#exec.stop()
   }
 
@@ -252,11 +319,14 @@ class ExecSession {
     const lineOf = (stepId: null | number) => stepId === null ? null : this.#steps[stepId]?.line ?? null
     // Scripts' `auv` calls (`@auv-js/sdk`) arrive here encoded, on their own port.
     const channel = new MessageChannel()
+    this.#sdkPort = channel.port1
     worker.postMessage({ type: SDK_PORT_MESSAGE }, [channel.port2])
     serveBridge(createWorkerChannel(channel.port1 as unknown as Worker).context, {
       record: async (start) => {
+        const runIndex = usePlayground.getState().runIndex
+        const backend = this.#runBackend
         const line = lineOf(start.stepId)
-        const described = await this.#runBackend?.sdk().describe(start.method)
+        const described = await backend?.sdk().describe(start.method)
         const decode = (body: Uint8Array, as: 'request' | 'response') => {
           try {
             return as === 'request' ? described?.decodeRequest(body) : described?.decodeResponse(body)
@@ -282,9 +352,11 @@ class ExecSession {
         // TODO(playground-sdk-stream-progress): a stream's resources appear
         // when it ends; show each scroll-until step as it arrives.
         return (end) => {
+          if (usePlayground.getState().runIndex !== runIndex)
+            return
           const responses = end.exchange.flatMap(frame => 'response' in frame ? [frame.response] : [])
           const results = end.json !== undefined ? [JSON.parse(end.json) as unknown] : responses.map(body => decode(body, 'response'))
-          const scope = new CallScope(callId, seq, this.#runBackend)
+          const scope = new CallScope(callId, seq, backend)
           if (described) {
             try {
               const request = start.body && fromBinary(described.input, start.body)
@@ -306,8 +378,11 @@ class ExecSession {
           })
         }
       },
-      target: () => this.#runBackend?.sdk().target
-        ?? '`auv` needs a device, the mock desktop, or a replay of a run that made the same calls',
+      target: executionId => executionId !== this.#cellId || !this.#running || this.#runAbort?.signal.aborted
+        ? 'This script execution has ended.'
+        : this.#runBackend
+          ? { ...this.#runBackend.sdk().target, signal: this.#runAbort?.signal }
+          : '`auv` needs a device, the mock desktop, or a replay of a run that made the same calls',
     })
     const host: HostApi = {
       onBind: (bindId, values, at) => {
@@ -316,6 +391,10 @@ class ExecSession {
           return
         const hit = ++this.#bindHits[bindId]!
         this.#batch.binds.push({ at, hit, line: site.line, seq: this.#nextSeq(at), values })
+      },
+      onCodeOutput: (content) => {
+        this.#codeOutput.push(content)
+        this.#log('show', [content.type === 'text' ? content.text : 'Image emitted to the agent.'], this.#lastLine)
       },
       onDraw: (target, label, stepId) => {
         const shape = markShape(target)

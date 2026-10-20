@@ -1,9 +1,11 @@
+import { Tabs } from '@base-ui/react/tabs'
 import { Tooltip } from '@base-ui/react/tooltip'
-import { useEffect, useState } from 'react'
-import { Group, Panel, usePanelRef } from 'react-resizable-panels'
+import { useEffect } from 'react'
+import { Group, Panel } from 'react-resizable-panels'
 
 import { PanelFrame } from './components/PanelFrame'
 import { ResizeHandle } from './components/ResizeHandle'
+import { TabBar } from './components/TabBar'
 import { AgentTab } from './features/agent/AgentTab'
 import { DesktopCanvas } from './features/desktop/DesktopCanvas'
 import { restoreDevices } from './features/device/devices'
@@ -18,15 +20,6 @@ import { StatusBar } from './features/workbench/StatusBar'
 import { session } from './runtime/session'
 
 export function App() {
-  const [inspectorOpen, setInspectorOpen] = useState(true)
-  const inspectorRef = usePanelRef()
-  const toggleInspector = () => {
-    if (inspectorOpen)
-      inspectorRef.current?.collapse()
-    else
-      inspectorRef.current?.expand()
-  }
-
   useEffect(() => {
     // Debugger keys work regardless of focus (the editor may not be focused
     // after clicking a toolbar button).
@@ -53,39 +46,37 @@ export function App() {
     <Tooltip.Provider delay={300}>
       <div className="flex flex-col h-full">
         <div className="flex flex-1 min-h-0">
-          <ActivityBar inspectorOpen={inspectorOpen} onToggleInspector={toggleInspector} />
+          <ActivityBar />
           <div className="flex flex-1 flex-col min-w-0">
             <div className="flex-1 min-h-0">
               <Group orientation="vertical">
                 <Panel defaultSize="70%" minSize="30%">
                   <Group orientation="horizontal">
-                    <Panel defaultSize="32%" minSize="15%">
+                    <Panel defaultSize="38%" minSize="15%">
                       <PanelFrame title="Desktop">
                         <DesktopCanvas />
                       </PanelFrame>
                     </Panel>
                     <ResizeHandle orientation="horizontal" />
-                    <Panel defaultSize="30%" minSize="15%">
-                      <PanelFrame title="Script">
-                        <CodeEditor />
-                        <DebugBar />
-                      </PanelFrame>
+                    <Panel defaultSize="40%" minSize="20%">
+                      <Tabs.Root className="bg-surface-1 flex flex-col h-full" defaultValue="agent">
+                        <TabBar tabs={[
+                          { icon: 'i-ph-chat-circle', label: 'Agent', value: 'agent' },
+                          { icon: 'i-ph-code', label: 'Script', value: 'script' },
+                        ]}
+                        />
+                        {/* Keep the connection and editor alive when switching tabs. */}
+                        <Tabs.Panel className="flex-1 min-h-0 data-[hidden]:hidden" keepMounted value="agent">
+                          <AgentTab />
+                        </Tabs.Panel>
+                        <Tabs.Panel className="flex-1 min-h-0 relative data-[hidden]:hidden" keepMounted value="script">
+                          <CodeEditor />
+                          <DebugBar />
+                        </Tabs.Panel>
+                      </Tabs.Root>
                     </Panel>
                     <ResizeHandle orientation="horizontal" />
-                    <Panel defaultSize="22%" minSize="15%">
-                      <PanelFrame title="Agent">
-                        <AgentTab />
-                      </PanelFrame>
-                    </Panel>
-                    <ResizeHandle orientation="horizontal" />
-                    <Panel
-                      collapsedSize={0}
-                      collapsible
-                      defaultSize="16%"
-                      minSize="10%"
-                      onResize={size => setInspectorOpen(size.asPercentage > 0)}
-                      panelRef={inspectorRef}
-                    >
+                    <Panel defaultSize="22%" minSize="12%">
                       <Inspector />
                     </Panel>
                   </Group>

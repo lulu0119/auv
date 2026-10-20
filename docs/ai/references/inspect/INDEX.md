@@ -2,9 +2,21 @@
 
 AUV tracing, run storage, artifact delivery, and inspect viewer contracts
 
-Count: **14**
+Count: **17**
 
 ## Current
+
+- [`2026-10-20-exterior-adapter-research.md`](2026-10-20-exterior-adapter-research.md)
+  (Exterior package contract, device discovery, OAuth callback, tickets,
+  agent working directories, custom proxy setup, and source evidence)
+
+- [`2026-10-20-codemode-agent-interface-research.md`](2026-10-20-codemode-agent-interface-research.md)
+  (source comparison of Pi, OpenCode V2, and Playground codemode execution,
+  SDK discovery, signatures, and results)
+
+- [`2026-10-14-playground-codemode-design.md`](2026-10-14-playground-codemode-design.md)
+  (playground-owned codemode for ACP agents: MCP proxy, isolated execution,
+  explicit output, session state, cancellation, and browser mock evidence)
 
 - [`2026-07-26-tracing-write-pipeline.md`](2026-07-26-tracing-write-pipeline.md)
   (current producer-side `auv-tracing` contract and implementation handoff)

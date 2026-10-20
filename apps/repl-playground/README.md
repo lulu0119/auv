@@ -43,14 +43,14 @@ controlled desktop.
   changes on input, so everything works without a device. It is a mock Runner
   (`createMockTransport` from `@auv-js/sdk`): it answers the same Runner RPCs
   as a device, so scripts, the timeline and replay behave the same on it.
-- **Agent tab** (next to Script): sign in with Mukae, open an agent on one of
-  your machines, and let it write the scripts. The agent only reaches the
-  sandbox through code blocks you apply to the editor; its own local tools
-  need your per-call approval and cannot see the mock desktop. The toolbar
-  runs the editor, resets the sandbox, and sends finished-run evidence back
-  to the agent, closing the loop. The session is never persisted: a new
-  connection spawns a fresh agent process, and disconnecting kills it.
-  Set `VITE_MUKAE_URL` at build time when the relay is not local.
+- **Agent / Script tabs**: share the center panel. Sign in with Exterior and
+  connect a codemode agent. Tab switches retain the connection and editor.
+  With the playground agent proxy, the agent calls `codemode` to execute code
+  against the selected Device or mock desktop. Explicit output returns to the
+  agent; SDK calls appear in the timeline. Connections require codemode.
+  A new connection starts a fresh agent process; disconnect ends it.
+  The chat is not persisted. For a remote relay, set `VITE_EXTERIOR_URL`
+  at build time.
 
 ## Quick start
 
@@ -252,6 +252,112 @@ the pixels in when they load.
 Playground helper types (`Area`, `AreaEdges`, `Rect`, `Point`, …) can be used
 by name in cells, e.g. `function toolbar(win: Area): Area`.
 
+## Agent codemode
+
+The playground supplies its own code tool to an ACP agent. Pi is not required.
+An agent-side proxy exposes one HTTP MCP tool and forwards execution requests
+over the existing ACP connection. The browser requires no public listener.
+
+On the agent device, install this checkout's dependencies.
+Configure an Exterior custom agent slot with an absolute proxy path:
+
+```sh
+exterior agent-config create --name auv --command 'node "<absolute-checkout>/apps/repl-playground/agent/proxy.mjs" -- <ACP executable> <arguments>'
+```
+
+Replace the placeholders with the actual paths and command.
+The underlying agent must advertise HTTP MCP support.
+Sign in and start the Exterior daemon against the same relay:
+
+```sh
+exterior login --relay <relay-origin>
+exterior daemon --relay <relay-origin>
+```
+
+Set `VITE_EXTERIOR_URL` to that relay origin before the Playground starts or
+builds. Its default is `http://127.0.0.1:8787`.
+
+From this checkout, the equivalent command is:
+
+```sh
+pnpm -F @auv-js/repl-playground agent:proxy -- <ACP executable> <arguments>
+```
+
+In the Agent tab, select that slot. **Code execution connected** appears after
+the connection negotiates codemode. The agent can then execute code and read
+its output directly.
+Connections without the codemode extension show a setup message and cannot
+start a chat.
+
+Exterior is a concrete connection adapter in `src/features/agent/exterior.ts`.
+It owns OAuth callback configuration, device discovery, and connection tickets.
+It converts a ticket into `{ url, label, cwd }` for the ACP session.
+The `cwd` comes from the agent device's `workingDirectory`.
+The ACP client, proxy, execution worker, and API help remain Playground-owned.
+The agent device and the selected AUV device can be different computers.
+
+The tool description and the first prompt explain the help interface. Help is
+generated from the same SDK declarations that the scripts call:
+
+```ts
+text(api.help()) // quick start, core signatures, limits, and execution rules
+text(api.search({ limit: 5, query: 'window text' }))
+text(api.describe({ path: 'WindowClient.findText' }))
+text(api.describe({ path: 'FindWindowTextOptions' })) // follow a related type
+```
+
+Search returns exact paths, signatures, and a pagination offset. Use
+`namespace: 'WindowClient'` to browse its methods. Detailed help includes
+argument and return types, source documentation, and examples for common tasks.
+`WindowClient` names the object returned by `auv.windows.resolve/get/list/from`.
+It is not a global constructor. Help queries do not call the device.
+
+Callbacks, stream controllers, and async iterators remain unavailable in the
+VM. Search omits those methods. An exact `api.describe` query explains the
+restriction. Help describes the SDK contract. A device can still reject an
+unsupported platform operation.
+
+```ts
+const counter = await auv.windows.resolve({ appName: 'Counter' })
+const found = await counter.findText('Increment')
+if (found.matches.length !== 1)
+  throw new Error('Expected one button')
+await counter.click(found.matches[0]!)
+text((await counter.findText('Count')).matches.map(match => match.text))
+store('counterId', counter.id)
+await image((await counter.capture()).capture!)
+```
+
+Each call uses a fresh QuickJS VM. It has no browser, network, filesystem or
+Node globals. Scripts receive `auv`, SDK constants and geometry helpers,
+`text`, `image`, and `store/load`. Top-level `await` and `return` are supported.
+The editor retains its own REPL variables.
+
+`store/load` retains up to 64,000 characters of JSON in the current ACP session.
+Successful calls commit state. Failed or canceled calls retain the committed
+state. Save IDs rather than SDK clients. For example, use
+`await auv.windows.get(load('counterId'))` in a later call.
+
+Only explicit output and errors return to the agent. Text output has a
+16,000-character limit. `await image(capture)` fetches a PNG bounded to
+1024×1024 pixels. Image output has separate size limits to fit the ACP frame.
+Pixels never enter the VM or its store.
+For a smaller image, pass SDK capture-image options to `image(capture, options)`.
+Dimensions must remain within 1024×1024. PNG and JPEG are supported.
+
+Stop, timeout, disconnect and session replacement cancel the call. Inputs
+already delivered remain effective. Script completion proves execution only.
+Read app state to verify the requested result. SDK callbacks, async iterators
+and editor-only helpers are deferred. They fail explicitly instead of
+silently returning incomplete results.
+Agent code appears in the editor for inspection. Use the agent to rerun it.
+Run, stepping, replay and editor types use the editor REPL
+environment, which does not supply codemode helpers.
+
+Evidence level: automated protocol integration and a browser mock Runner test.
+Live Exterior authentication and an LLM agent were not exercised. See the
+[implementation and evidence](../../docs/ai/references/inspect/2026-10-14-playground-codemode-design.md).
+
 ## Architecture
 
 ```
@@ -276,6 +382,9 @@ store (zustand) ─▶ canvas, timeline, inspector, editor decorations
   host-resolved promise (birpc). Its `auv` client sends encoded RPCs to the
   page on their own port (`runtime/sdk-bridge.ts`); the page adds the device
   credential, forwards them to the backend's transport and records them.
+- Codemode uses a temporary worker and an isolated QuickJS VM. It shares the
+  compiler, SDK bridge, recording backend and timeline with the editor.
+  `agent/proxy.mjs` adapts standard MCP calls to the browser's ACP extension.
 - `runtime/rpc-resources.ts` turns recorded SDK messages into host-side
   resources (frames, text, receipts, windows, displays) by protobuf type.
 - `src/components` holds store-agnostic UI building blocks (icon buttons, tab
@@ -316,16 +425,17 @@ These are known and intentionally deferred; each is marked in code.
 - **Not a sandbox.** The exec worker shares the page origin, and the paired
   Device credentials are stored in `localStorage`. Run only your own scripts and
   keep the REPL on a local origin.
-- **Agent tab**: sign-in and tickets come from `@mukae/client` (pinned to a
-  Mukae preview publish, see `NOTICE(preview-exotic-subdeps)` in
-  `pnpm-workspace.yaml`), but the thread UI is the playground's own over
-  `@hafbit/react-acp` hooks. Only the OAuth callback address is adapted
-  (`account.tsx` rebases it under `/playground/`). Sessions are single
-  and ephemeral (no directory picker, no session list, old sessions linger in
-  the host agent process). Agent browser-auth (`auth-required`) has no UI yet.
-  Applying code and running always need a human click; there is no auto-run.
-  Double dials (StrictMode, HMR) share one ticket: the relay lets an infant
-  socket retake it (mukae ADR 0011).
+- **Agent tab**: `exterior.ts` adapts sign-in, devices, and tickets from
+  `@exterior/client`. The packages use an immutable preview revision.
+  See `NOTICE(preview-exotic-subdeps)` in `pnpm-workspace.yaml` and the
+  [Exterior contract research](../../docs/ai/references/inspect/2026-10-20-exterior-adapter-research.md).
+  The thread uses `@hafbit/react-acp` hooks. Sessions are ephemeral.
+  There is no directory picker or session list; the device supplies the directory.
+  Old sessions linger in the host agent process until disconnect.
+  Agent browser-auth (`auth-required`) has no UI yet.
+  Codemode negotiation is required before the session starts.
+  SDK callbacks and iterators remain deferred (`NOTICE(codemode-callbacks)`).
+  A failed initial connection obtains a fresh ticket, with two automatic retries.
 - `const` at the top level becomes reassignable across cells (same as
   `node:repl`), and a line starting with `(` or `[` continues the previous
   statement unless it ends with `;`.
@@ -337,7 +447,11 @@ pnpm -F @auv-js/repl-playground lint      # oxlint + eslint via moeru-lint
 pnpm -F @auv-js/repl-playground typecheck
 pnpm -F @auv-js/repl-playground test:run  # stepper, area, camera, replay, resource and store tests
 pnpm -F @auv-js/repl-playground build
+pnpm -F @auv-js/repl-playground test:browser # real MCP + ACP bridge + browser mock Runner
 ```
+
+The browser test requires an installed Playwright browser. On Windows it uses
+Edge by default. Set `PLAYWRIGHT_CHANNEL` to select another installed channel.
 
 The root `pnpm lint`, `pnpm typecheck` and `pnpm test:run` include this package.
 The root ESLint config ignores `devtools/**`, so this package keeps its own

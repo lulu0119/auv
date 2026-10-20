@@ -350,3 +350,12 @@ body {
 .agent-md ol {
   padding-left: 18px;
 }
+
+.agent-md pre {
+  padding: 8px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  max-height: 256px;
+  overflow: auto;
+  white-space: pre-wrap;
+}

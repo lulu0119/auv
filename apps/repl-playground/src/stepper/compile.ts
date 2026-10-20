@@ -25,6 +25,7 @@ export interface CompiledCell {
 }
 
 export interface CompileOptions {
+  allowReturn?: boolean
   /** Stable cell identifier used in `sourceURL` and stack traces. */
   cellId?: number | string
   /**
@@ -93,6 +94,7 @@ export function compileCell(source: string, options: CompileOptions = {}): Compi
   try {
     ast = parse(js, {
       allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: options.allowReturn,
       ecmaVersion: 'latest',
       locations: true,
       sourceType: 'script',

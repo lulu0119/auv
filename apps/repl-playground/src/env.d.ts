@@ -6,6 +6,6 @@ declare module '*.d.txt?raw' {
 }
 
 interface ImportMetaEnv {
-  /** Mukae relay origin for Agent sign-in; defaults to the local relay. */
-  readonly VITE_MUKAE_URL?: string
+  /** Exterior relay origin for Agent sign-in; defaults to the local relay. */
+  readonly VITE_EXTERIOR_URL?: string
 }

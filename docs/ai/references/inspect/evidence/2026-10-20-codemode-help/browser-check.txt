@@ -1,0 +1,64 @@
+js/packages/cli/npm/darwin-arm64         | [WARN] Unsupported platform: wanted: {"cpu":["arm64"],"os":["darwin"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+js/packages/cli/npm/darwin-x64           | [WARN] Unsupported platform: wanted: {"cpu":["x64"],"os":["darwin"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+js/packages/cli/npm/linux-arm64-gnu      | [WARN] Unsupported platform: wanted: {"cpu":["arm64"],"os":["linux"],"libc":["glibc"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+js/packages/cli/npm/linux-x64-gnu        | [WARN] Unsupported platform: wanted: {"cpu":["x64"],"os":["linux"],"libc":["glibc"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+js/packages/cli/npm/win32-arm64-msvc     | [WARN] Unsupported platform: wanted: {"cpu":["arm64"],"os":["win32"],"libc":["any"]} (current: {"os":"win32","cpu":"x64","libc":"unknown"})
+$ node agent/verify-browser.mjs
+{
+  "agentUi": {
+    "connectionPreserved": true,
+    "deviceDirectory": true,
+    "newSessionBriefing": true,
+    "unsupportedAgentBlocked": true
+  },
+  "calls": [
+    {
+      "effect": "read",
+      "method": "windows.resolve",
+      "status": "ok"
+    },
+    {
+      "effect": "read",
+      "method": "window.findText",
+      "status": "ok"
+    },
+    {
+      "effect": "input",
+      "method": "input.click",
+      "status": "ok"
+    },
+    {
+      "effect": "input",
+      "method": "input.click",
+      "status": "ok"
+    },
+    {
+      "effect": "input",
+      "method": "input.click",
+      "status": "ok"
+    },
+    {
+      "effect": "read",
+      "method": "window.findText",
+      "status": "ok"
+    },
+    {
+      "effect": "read",
+      "method": "window.capture",
+      "status": "ok"
+    },
+    {
+      "effect": "read",
+      "method": "captures.image",
+      "status": "ok"
+    }
+  ],
+  "cancellation": true,
+  "discoveryAndHelpExample": true,
+  "editorStatePreserved": true,
+  "images": true,
+  "mountedTabsPreserved": true,
+  "stateRollback": true,
+  "timeoutAndRecovery": true,
+  "viewportFit": true
+}

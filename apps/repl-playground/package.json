@@ -5,12 +5,14 @@
   "private": true,
   "description": "Interactive, steppable TypeScript REPL for scripting AUV, with a desktop canvas",
   "scripts": {
+    "agent:proxy": "node agent/proxy.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "moeru-lint .",
     "lint:fix": "moeru-lint --fix .",
     "test:run": "vitest run",
+    "test:browser": "node agent/verify-browser.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -27,16 +29,18 @@
     "@codemirror/search": "catalog:",
     "@codemirror/state": "catalog:",
     "@codemirror/view": "catalog:",
+    "@exterior/client": "catalog:",
+    "@exterior/contract": "catalog:",
     "@hafbit/react-acp": "catalog:",
+    "@jitl/quickjs-singlefile-browser-release-sync": "catalog:",
     "@lezer/highlight": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
     "@moeru/eventa": "catalog:",
-    "@mukae/client": "catalog:",
-    "@mukae/contract": "catalog:",
     "@typescript/vfs": "catalog:",
     "acorn": "catalog:",
     "birpc": "catalog:",
     "magic-string": "catalog:",
-    "oauth4webapi": "catalog:",
+    "quickjs-emscripten-core": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",
@@ -44,7 +48,6 @@
     "thumbhash": "catalog:",
     "ts-blank-space": "catalog:",
     "typescript": "catalog:",
-    "valibot": "catalog:",
     "zustand": "catalog:"
   },
   "devDependencies": {
@@ -59,8 +62,10 @@
     "eslint-plugin-oxlint": "catalog:",
     "eslint-plugin-react-refresh": "catalog:",
     "oxlint": "catalog:",
+    "playwright": "catalog:",
     "unocss": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:vitest"
+    "vitest": "catalog:vitest",
+    "ws": "catalog:"
   }
 }

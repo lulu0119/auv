@@ -1,0 +1,89 @@
+import catalog from 'virtual:auv-codemode-help'
+
+import { describe, expect, it } from 'vitest'
+
+import { compileCell } from '../stepper/compile'
+import { runCodeMode } from '../workers/codemode'
+import { createApiHelp } from './codemode-help'
+
+const api = createApiHelp(catalog)
+
+describe('agent SDK help', () => {
+  it('finds exact SDK paths and pages a namespace without hidden streaming methods', () => {
+    const first = api.search({ limit: 2, namespace: 'WindowClient' })
+    expect(first.items).toHaveLength(2)
+    expect(first.remaining).toBeGreaterThan(0)
+    const second = api.search({ limit: 2, namespace: 'WindowClient', offset: first.next!.offset })
+    expect(second.items.map(item => item.path)).not.toContain(first.items[0].path)
+    const found = api.search({ query: 'WindowClient.findText' })
+    expect(found.items[0]).toMatchObject({ path: 'WindowClient.findText', signature: expect.stringContaining('query: string') })
+    expect(api.search({ query: 'scrollStream' }).items.map(item => item.path)).not.toContain('WindowClient.scrollStream')
+    expect(api.describe({ path: 'WindowClient.scrollStream' })).toMatchObject({ found: true, unavailable: expect.stringContaining('async iterator') })
+  })
+
+  it('describes SDK arguments and output fields rather than raw RPC call arguments', () => {
+    const entry = api.describe({ path: 'WindowClient.findText' })
+    expect(entry).toMatchObject({ examples: [expect.stringContaining('win.findText("Increment")')], found: true, signature: expect.stringContaining('Promise<FindWindowTextResponse>') })
+    expect(JSON.stringify(entry)).toContain('matches')
+    expect(JSON.stringify(entry)).not.toContain('AbortSignal')
+    expect(catalog.types.FindWindowTextOptions.definition).not.toContain('window:')
+    expect(catalog.types.FindWindowTextResponse.definition).toContain('capture?')
+    const target = api.describe({ path: 'PointTarget' })
+    expect(target).toMatchObject({ description: expect.stringContaining('window-local'), found: true })
+    expect(api.describe({ path: 'not.real' })).toMatchObject({ found: false, message: expect.stringContaining('api.search') })
+    expect(api.describe({ path: '__proto__' })).toMatchObject({ found: false })
+  })
+
+  it('includes selected constants and geometry while excluding connection APIs', () => {
+    expect(api.search({ namespace: 'sdk.Position' }).items.map(item => item.path)).toEqual(['sdk.Position.display', 'sdk.Position.screen', 'sdk.Position.window'])
+    expect(api.describe({ path: 'sdk.InputPolicy' })).toMatchObject({ found: true })
+    expect(JSON.stringify(api.describe({ path: 'sdk.InputPolicy' }))).toContain('BACKGROUND_ONLY')
+    expect(api.search({ query: 'connect' }).items.map(item => item.path)).not.toContain('sdk.connect')
+    expect(() => api.search({ limit: 11 })).toThrow('limit from 1 to 10')
+    expect(() => api.search({ offset: -1 })).toThrow('nonnegative offset')
+  })
+
+  it('keeps each help result within the VM output budget and resolves its type links', () => {
+    for (const path of [...catalog.entries.map(entry => entry.path), ...Object.keys(catalog.types)]) {
+      const help = api.describe({ path })
+      expect(JSON.stringify(help).length, path).toBeLessThanOrEqual(16000)
+      if ('relatedTypes' in help) {
+        for (const name of help.relatedTypes!)
+          expect(catalog.types[name], `${path} links to ${name}`).toBeDefined()
+      }
+    }
+  })
+
+  // Help examples must execute against the same SDK interface that they describe.
+  it('lets a fresh VM discover help and execute a returned example', async () => {
+    const sources: string[] = []
+    const run = (source: string, auv = {}) => {
+      sources.push(source)
+      return runCodeMode({ ...compileCell(source, { allowReturn: true }), breakpoints: [], codemode: { store: {}, timeoutMs: 2000 }, executionId: sources.length, mode: 'run' }, {
+        __bind: () => {},
+        __step: async () => {},
+        __stepSync: () => {},
+        auv,
+      }, new AbortController().signal)
+    }
+    const discovery = await run('text(api.help()); text(api.describe({ path: api.search({ query: "WindowClient.findText" }).items[0].path }));')
+    expect(discovery.status).toBe('ok')
+    expect(discovery.codemode!.content[0]).toMatchObject({ text: expect.stringContaining('api.search') })
+    const item = discovery.codemode!.content[1] as { text: string }
+    const help = JSON.parse(item.text)
+    const calls: string[] = []
+    const outcome = await run(help.examples[0], {
+      windows: {
+        resolve: async () => ({
+          findText: async (query: string) => {
+            calls.push(query)
+            return { matches: [{ text: 'Increment' }] }
+          },
+        }),
+      },
+    })
+    expect(outcome.status).toBe('ok')
+    expect(calls).toEqual(['Increment'])
+    expect(outcome.codemode!.content).toEqual([{ text: '[{"text":"Increment"}]', type: 'text' }])
+  })
+})

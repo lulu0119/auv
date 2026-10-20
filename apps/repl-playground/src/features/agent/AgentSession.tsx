@@ -1,15 +1,21 @@
-import type { AgentConnection } from './AgentTab'
-
 import { createWebSocketStream } from '@agentclientprotocol/sdk/experimental/ws-client'
 import { AssistantRuntimeProvider } from '@assistant-ui/react'
 import { useAcpConnection, useAcpRuntime, useAcpRuntimeExtras, useAcpThreadState } from '@hafbit/react-acp'
 import { SdkAcpClientAdapter } from '@hafbit/react-acp/core'
 import { useEffect, useRef, useState } from 'react'
 
+import { version } from '../../../package.json'
 import { Empty } from '../../components/Empty'
 import { sandboxBriefing } from './agent-context'
 import { AgentThread } from './AgentThread'
-import { appendUserMessage } from './append'
+import { CodeModeHost, codeModeStream } from './codemode-bridge'
+
+/** Provider-independent input for a fresh ACP connection. */
+export interface AgentConnection {
+  cwd: string
+  label: string
+  url: string
+}
 
 /**
  * One live ACP connection to the agent behind the ticket. Mounting connects;
@@ -61,9 +67,9 @@ export function AgentSession({ connection, onDisconnect, onInfantDeath, onRetry,
 }
 
 function AuthPanel() {
-  // TODO(agent-auth): no ACP agent used here has needed browser auth yet;
-  // keep the panel minimal until one does.
-  return <Empty>The agent asks for authentication, which this tab does not support yet.</Empty>
+  // TODO(agent-auth): interactive ACP authentication requires an approved
+  // agent-authentication flow; this panel reports the requirement.
+  return <Empty>The agent requires authentication that this tab cannot complete.</Empty>
 }
 
 /** Human-readable form of the thread's connection error, when it carries one. */
@@ -89,38 +95,50 @@ function LiveConnection({ connection, onInfantDeath, onRetry, opening }: {
   onRetry: () => void
   opening: boolean
 }) {
-  const [adapter] = useState(() => new SdkAcpClientAdapter(() => createWebSocketStream(connection.url)))
+  const [codemode] = useState(() => new CodeModeHost())
+  const [supportsCodemode, setSupportsCodemode] = useState(false)
+  const [adapter] = useState(() => new SdkAcpClientAdapter(({ signal }) => codeModeStream(
+    createWebSocketStream(connection.url),
+    codemode,
+    signal,
+    setSupportsCodemode,
+    sandboxBriefing,
+  )))
   const runtime = useAcpRuntime({
-    clientInfo: { name: 'auv-playground', version: '0.0.32' },
+    clientCapabilities: { _meta: { auv: { codemode: 1 } } },
+    clientInfo: { name: 'auv-playground', version },
     connection: { adapter, type: 'adapter' },
-    // TODO(agent-directory): every session takes the workspace cwd. There is
-    // no directory picker yet, so the sandbox uses the host root; the briefing
-    // tells the agent to stay out of its local tools.
-    workspace: { cwd: '/' },
+    // TODO(agent-directory): an explicit directory picker is deferred until
+    // an approved workspace-selection slice; use the device's directory.
+    workspace: { cwd: connection.cwd },
   })
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <SessionBody connection={connection} onInfantDeath={onInfantDeath} onRetry={onRetry} opening={opening} runtime={runtime} />
+      <SessionBody codemode={codemode} onInfantDeath={onInfantDeath} onRetry={onRetry} opening={opening} supportsCodemode={supportsCodemode} />
     </AssistantRuntimeProvider>
   )
 }
 
-function SessionBody({ connection, onInfantDeath, onRetry, opening, runtime }: {
-  connection: AgentConnection
+function SessionBody({ codemode, onInfantDeath, onRetry, opening, supportsCodemode }: {
+  codemode: CodeModeHost
   onInfantDeath: () => void
   onRetry: () => void
   opening: boolean
-  runtime: ReturnType<typeof useAcpRuntime>
+  supportsCodemode: boolean
 }) {
   const { error, status } = useAcpConnection()
   const thread = useAcpThreadState()
   const extras = useAcpRuntimeExtras()
   const [failure, setFailure] = useState('')
   const creatingRef = useRef(false)
-  const briefedRef = useRef<null | string>(null)
   const everReadyRef = useRef(false)
   const reportedRef = useRef(false)
+
+  useEffect(() => {
+    codemode.setSession(thread.activeSessionId)
+    return () => codemode.cancel()
+  }, [codemode, thread.activeSessionId])
 
   useEffect(() => {
     if (status === 'ready') {
@@ -136,11 +154,10 @@ function SessionBody({ connection, onInfantDeath, onRetry, opening, runtime }: {
     }
   }, [status, onInfantDeath])
 
-  // A fresh session for this connection only. The host agent process is new
-  // (one process per ticket), so there is nothing old worth resuming.
+  // Each connection starts a fresh process and a new ACP session.
   useEffect(() => {
     const ensureSession = async () => {
-      if (status !== 'ready' || thread.activeSessionId !== undefined || creatingRef.current)
+      if (status !== 'ready' || !supportsCodemode || thread.activeSessionId !== undefined || creatingRef.current)
         return
       creatingRef.current = true
       setFailure('')
@@ -156,25 +173,7 @@ function SessionBody({ connection, onInfantDeath, onRetry, opening, runtime }: {
       }
     }
     void ensureSession()
-  }, [status, thread.activeSessionId, extras])
-
-  // Brief the agent once per session: sandbox rules and the script API, then
-  // let it answer so the human sees it is ready.
-  useEffect(() => {
-    const briefSession = async () => {
-      const active = thread.activeSessionId
-      if (status !== 'ready' || !active || briefedRef.current === active)
-        return
-      briefedRef.current = active
-      try {
-        appendUserMessage(runtime, sandboxBriefing(connection.label))
-      }
-      catch (cause) {
-        setFailure(cause instanceof Error ? cause.message : String(cause))
-      }
-    }
-    void briefSession()
-  }, [status, thread.activeSessionId, connection.label, runtime])
+  }, [status, supportsCodemode, thread.activeSessionId, extras])
 
   if (status === 'auth-required')
     return <AuthPanel />
@@ -198,9 +197,12 @@ function SessionBody({ connection, onInfantDeath, onRetry, opening, runtime }: {
   }
   if (status !== 'ready')
     return <Empty>{status === 'connecting' ? 'Opening the agent.' : status}</Empty>
+  if (!supportsCodemode) {
+    return <Empty>This connection does not provide code execution. Configure the Playground agent proxy on the agent device, then reconnect.</Empty>
+  }
   if (failure)
     return <Empty><span className="text-bad">{failure}</span></Empty>
   if (thread.activeSessionId === undefined)
     return <Empty>Starting a new session.</Empty>
-  return <AgentThread runtime={runtime} />
+  return <AgentThread />
 }

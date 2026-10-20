@@ -7,8 +7,8 @@ import { resetMockDesktop } from '../device/devices'
 
 const THEME_KEY = 'auv-playground:theme'
 
-/** Left rail for global actions: live view, pins, inspector, REPL reset, theme. The Device lives in the status bar. */
-export function ActivityBar({ inspectorOpen, onToggleInspector }: { inspectorOpen: boolean, onToggleInspector: () => void }) {
+/** Left rail for global actions: live view, pins, REPL reset, theme. The Device lives in the status bar. */
+export function ActivityBar() {
   const live = usePlayground(state => state.live)
   const connected = usePlayground(state => state.backend !== null)
   const pins = usePlayground(state => state.pins.length)
@@ -43,13 +43,6 @@ export function ActivityBar({ inspectorOpen, onToggleInspector }: { inspectorOpe
         hint={live ? 'Stop live desktop view' : 'Live desktop view'}
         icon="i-ph-broadcast"
         onClick={() => session.setLive(!live)}
-        side="right"
-      />
-      <IconButton
-        active={inspectorOpen}
-        hint={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
-        icon="i-ph-sidebar-simple"
-        onClick={onToggleInspector}
         side="right"
       />
       <IconButton

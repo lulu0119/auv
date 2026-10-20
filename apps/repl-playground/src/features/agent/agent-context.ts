@@ -1,23 +1,27 @@
-const briefingOpening = 'You drive the AUV Playground sandbox on this page, not a real computer.'
+import catalog from 'virtual:auv-codemode-help'
+
+import { createApiHelp } from '../../script-api/codemode-help'
+
+const briefingOpening = 'You operate the selected AUV Playground environment on this page.'
 
 /** Whether a user message is the sandbox briefing, so the thread can fold it instead of showing it as a human message. */
 export function isSandboxBriefing(text: string): boolean {
   return text.startsWith(briefingOpening)
 }
 
-/** Briefing sent as the first user message so the agent writes runnable sandbox scripts. */
-export function sandboxBriefing(deviceLabel: string): string {
+/** Briefing attached to the first prompt on a codemode connection. */
+export function sandboxBriefing(): string {
   return [
     briefingOpening,
-    `The desktop on the left is a mock desktop (${deviceLabel}). Only its apps exist: Todos, Counter, and Music (a 40-song list that scrolls and plays on click).`,
-    'When the user describes a task, write one TypeScript script per answer using the page\'s script API:',
-    '- `auv` is the Runner client: `await auv.windows.resolve({ appName })`, `window.findText(query)`, `window.click(target)`, `window.capture()`, `window.typeText(text)`, `window.pressKeys(keys)`, `window.scroll(target, { deltaY })`, `window.scrollUntil(target, {...}, { until })`, `auv.recognizeText(capture)`.',
-    '- Helpers: `area(window).region({...}).named(name)`, `draw(target, label)`, `focus(target)`, `show(value, label)`, `centerOf(bounds)`, `sleep(ms)`, and the `sdk` module (`sdk.InputPolicy`, `sdk.Position`, `sdk.below`, ...).',
-    '- `click({ x, y })` on a window is window-local; text matches and areas click at their center. Positive `deltaY` scrolls down.',
-    'Rules:',
-    '- This message is only a briefing. Until the user describes a task, reply in one or two sentences that you are ready, and do not write a script.',
-    '- For a task, answer with a fenced ```ts block. The human applies it to the editor and runs it in the sandbox, then pastes the run evidence back to you.',
-    '- Never use your own local tools (files, shell) for this task: you cannot see the mock desktop through them, and every tool call needs human approval.',
-    '- Iterate on the evidence: red (error output) means fix the script and send the next version; green means summarize what the script did.',
+    'Your codemode MCP tool executes TypeScript in this page against its selected Device or mock desktop. Your local files and shell do not reach that environment.',
+    'Use `auv` for SDK calls, `sdk` for input policy and geometry helpers, `text(value)` or `return` for selected results, and `await image(capture)` to show a capture reference as a bounded PNG.',
+    'Use `text(api.help())` for the quick start, `text(api.search({ query: "window text" }))` to find methods, and `text(api.describe({ path: "WindowClient.findText" }))` for exact arguments, return fields, related types, and runnable examples. Search results are paginated. Read help before guessing a method or parameter.',
+    `Core SDK signatures:\n${createApiHelp(catalog).help().starter.map(entry => entry.signature).join('\n')}`,
+    'Example: const win = await auv.windows.resolve({ appName: "Counter" }); const found = await win.findText("Increment"); text(found.matches);',
+    'Each tool call has fresh variables. `store(key, value)` and `load(key)` retain small JSON values only after successful calls. Save IDs, not SDK handles or pixels. Reconstruct a window with `await auv.windows.get(id)`.',
+    'SDK calls support JSON arguments. Callbacks, SDK async iterators and editor-only area/draw/focus helpers are not available in codemode yet.',
+    'Intermediate SDK responses remain in the timeline. Emit only the evidence you need. Await every device call. A failed or canceled script does not undo delivered inputs.',
+    'Successful execution and input delivery do not prove task success: read the relevant app state or show evidence to verify the requested result.',
+    'Wait for a user task, then call codemode and iterate on its result. The human can inspect or stop your execution.',
   ].join('\n')
 }
