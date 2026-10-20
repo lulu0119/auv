@@ -8,7 +8,7 @@
 use std::fmt;
 
 use auv_driver_common::geometry::Rect;
-use auv_driver_common::vision::{OcrMatch, OcrMatches, RecognizedText, TextRecognition, TextRecognitionOptions, normalize_match_text};
+use auv_driver_common::vision::{OcrMatches, RecognizedText, RecognizedWord, TextRecognition, TextRecognitionOptions, match_word_spans};
 #[cfg(target_os = "linux")]
 use image::ImageEncoder;
 
@@ -35,20 +35,10 @@ impl fmt::Display for OcrError {
 
 impl std::error::Error for OcrError {}
 
-#[derive(Clone, Debug, PartialEq)]
-struct Word {
-  text: String,
-  left: f64,
-  top: f64,
-  width: f64,
-  height: f64,
-  confidence: Option<f32>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Line {
   text: String,
-  words: Vec<Word>,
+  words: Vec<RecognizedWord>,
 }
 
 /// Recognizes text in a raw RGBA image using Tesseract.
@@ -58,8 +48,8 @@ struct Line {
 /// to Tesseract language ids and joined with `+`; the default is `eng`.
 #[cfg(target_os = "linux")]
 pub fn recognize_text_in_rgba(rgba: &[u8], width: u32, height: u32, options: &TextRecognitionOptions) -> Result<TextRecognition, OcrError> {
-  let tsv = tesseract_tsv_from_rgba(rgba, width, height, options)?;
-  Ok(text_recognition_from_tsv(&tsv))
+  let (tsv, scale) = tesseract_tsv_from_rgba(rgba, width, height, options)?;
+  Ok(text_recognition_from_tsv(&tsv, scale))
 }
 
 #[cfg(target_os = "linux")]
@@ -70,12 +60,19 @@ pub(crate) fn find_text_in_rgba(
   query: &str,
   options: &TextRecognitionOptions,
 ) -> Result<OcrMatches, OcrError> {
-  let tsv = tesseract_tsv_from_rgba(rgba, width, height, options)?;
-  Ok(text_matches_from_tsv(&tsv, query))
+  let (tsv, scale) = tesseract_tsv_from_rgba(rgba, width, height, options)?;
+  Ok(text_matches_from_tsv(&tsv, query, scale))
 }
 
+/// Images whose longer side is at most this many pixels are upscaled 2x
+/// before recognition; larger (HiDPI) captures already carry enough pixels.
 #[cfg(target_os = "linux")]
-fn tesseract_tsv_from_rgba(rgba: &[u8], width: u32, height: u32, options: &TextRecognitionOptions) -> Result<String, OcrError> {
+const UPSCALE_MAX_SIDE: u32 = 2560;
+
+/// Runs Tesseract and returns its TSV plus the factor that maps TSV pixel
+/// coordinates back onto the input image.
+#[cfg(target_os = "linux")]
+fn tesseract_tsv_from_rgba(rgba: &[u8], width: u32, height: u32, options: &TextRecognitionOptions) -> Result<(String, f64), OcrError> {
   let expected = (width as usize) * (height as usize) * 4;
   if rgba.len() != expected {
     return Err(OcrError::InvalidImage {
@@ -87,10 +84,26 @@ fn tesseract_tsv_from_rgba(rgba: &[u8], width: u32, height: u32, options: &TextR
     return Err(OcrError::ImageTooLarge);
   }
 
+  // NOTICE: Tesseract misses small UI text at 1x. On 118 OSWorld captures
+  // (1920x1080, scale 1) a 2x Lanczos upscale raised query matches from 6 to
+  // 13 and lost none; a DPI hint alone recovered nothing. On GNOME Wayland
+  // (2560x1440 display) the 1x pass recognized none of a text editor's body
+  // text. Bounds are scaled back below, so callers still receive input-image
+  // pixel coordinates.
+  let upscale = width.max(height) <= UPSCALE_MAX_SIDE;
   let mut png = Vec::new();
-  image::codecs::png::PngEncoder::new(&mut png)
-    .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
-    .map_err(|error| OcrError::Runtime(format!("failed to encode RGBA image as PNG: {error}")))?;
+  let encoder = image::codecs::png::PngEncoder::new(&mut png);
+  if upscale {
+    let source = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or(OcrError::InvalidImage {
+      expected,
+      actual: rgba.len(),
+    })?;
+    let enlarged = image::imageops::resize(&source, width * 2, height * 2, image::imageops::FilterType::Lanczos3);
+    encoder.write_image(enlarged.as_raw(), width * 2, height * 2, image::ExtendedColorType::Rgba8)
+  } else {
+    encoder.write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+  }
+  .map_err(|error| OcrError::Runtime(format!("failed to encode RGBA image as PNG: {error}")))?;
 
   let language = tesseract_language(options);
   // TODO(linux-tesseract-session-reuse): cache language-keyed engines only
@@ -104,7 +117,8 @@ fn tesseract_tsv_from_rgba(rgba: &[u8], width: u32, height: u32, options: &TextR
   // weighting is deferred until an owner-approved OCR-quality slice needs it.
   tess.set_image_from_mem(&png).map_err(|error| OcrError::Runtime(format!("failed to load image into Tesseract: {error}")))?;
   tess.set_source_resolution(144);
-  tess.get_tsv_text(0).map_err(|error| OcrError::Runtime(format!("failed to read Tesseract TSV: {error}")))
+  let tsv = tess.get_tsv_text(0).map_err(|error| OcrError::Runtime(format!("failed to read Tesseract TSV: {error}")))?;
+  Ok((tsv, if upscale { 0.5 } else { 1.0 }))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -148,8 +162,8 @@ fn tesseract_language_tag(language: &str) -> String {
   }
 }
 
-fn text_recognition_from_tsv(tsv: &str) -> TextRecognition {
-  let lines = parse_tsv_lines(tsv);
+fn text_recognition_from_tsv(tsv: &str, scale: f64) -> TextRecognition {
+  let lines = parse_tsv_lines(tsv, scale);
   let regions = lines
     .into_iter()
     .filter_map(|line| {
@@ -168,51 +182,13 @@ fn text_recognition_from_tsv(tsv: &str) -> TextRecognition {
   }
 }
 
-fn text_matches_from_tsv(tsv: &str, query: &str) -> OcrMatches {
-  let normalized_query = normalize_match_text(query);
-  if normalized_query.is_empty() {
-    return OcrMatches::default();
-  }
-
-  let mut matches = Vec::new();
-  for line in parse_tsv_lines(tsv) {
-    for start in 0..line.words.len() {
-      let mut candidate = String::new();
-      for end in start..line.words.len() {
-        if !candidate.is_empty() {
-          candidate.push(' ');
-        }
-        candidate.push_str(&line.words[end].text);
-        if !normalize_match_text(&candidate).contains(&normalized_query) {
-          continue;
-        }
-        let words = &line.words[start..=end];
-        let Some(bounds) = union_words(words) else {
-          break;
-        };
-        matches.push(OcrMatch {
-          text: candidate,
-          confidence: mean_confidence(words).unwrap_or_default() as f64,
-          bounds,
-        });
-        break;
-      }
-    }
-  }
-  let candidates = matches.clone();
-  matches.retain(|candidate| !candidates.iter().any(|other| candidate != other && rect_strictly_contains(candidate.bounds, other.bounds)));
-  OcrMatches { matches }
+fn text_matches_from_tsv(tsv: &str, query: &str, scale: f64) -> OcrMatches {
+  let lines = parse_tsv_lines(tsv, scale);
+  match_word_spans(lines.iter().map(|line| line.words.as_slice()), query)
 }
 
-fn rect_strictly_contains(container: Rect, candidate: Rect) -> bool {
-  let contains = candidate.origin.x >= container.origin.x
-    && candidate.origin.y >= container.origin.y
-    && candidate.origin.x + candidate.size.width <= container.origin.x + container.size.width
-    && candidate.origin.y + candidate.size.height <= container.origin.y + container.size.height;
-  contains && candidate.size.width * candidate.size.height < container.size.width * container.size.height
-}
-
-fn parse_tsv_lines(tsv: &str) -> Vec<Line> {
+/// Groups TSV word rows into lines; `scale` maps TSV pixels onto the input image.
+fn parse_tsv_lines(tsv: &str, scale: f64) -> Vec<Line> {
   let mut lines = Vec::<((String, String, String), Line)>::new();
   for row in tsv.lines().skip(1) {
     let columns = row.split('\t').collect::<Vec<_>>();
@@ -223,7 +199,7 @@ fn parse_tsv_lines(tsv: &str) -> Vec<Line> {
     if text.is_empty() {
       continue;
     }
-    let Some(word) = parse_word(&columns, text.clone()) else {
+    let Some(word) = parse_word(&columns, text.clone(), scale) else {
       continue;
     };
     let key = (columns[2].to_string(), columns[3].to_string(), columns[4].to_string());
@@ -246,13 +222,11 @@ fn parse_tsv_lines(tsv: &str) -> Vec<Line> {
   lines.into_iter().map(|(_, line)| line).collect()
 }
 
-fn parse_word(columns: &[&str], text: String) -> Option<Word> {
-  Some(Word {
+fn parse_word(columns: &[&str], text: String, scale: f64) -> Option<RecognizedWord> {
+  let pixel = |index: usize| columns.get(index)?.parse::<f64>().ok().map(|value| value * scale);
+  Some(RecognizedWord {
     text,
-    left: columns.get(6)?.parse().ok()?,
-    top: columns.get(7)?.parse().ok()?,
-    width: columns.get(8)?.parse().ok()?,
-    height: columns.get(9)?.parse().ok()?,
+    bounds: Rect::new(pixel(6)?, pixel(7)?, pixel(8)?, pixel(9)?),
     confidence: parse_confidence(columns.get(10)?),
   })
 }
@@ -266,23 +240,11 @@ fn parse_confidence(raw: &str) -> Option<f32> {
   }
 }
 
-fn union_words(words: &[Word]) -> Option<Rect> {
-  let mut iter = words.iter();
-  let first = iter.next()?;
-  let mut min_x = first.left;
-  let mut min_y = first.top;
-  let mut max_x = first.left + first.width;
-  let mut max_y = first.top + first.height;
-  for word in iter {
-    min_x = min_x.min(word.left);
-    min_y = min_y.min(word.top);
-    max_x = max_x.max(word.left + word.width);
-    max_y = max_y.max(word.top + word.height);
-  }
-  Some(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+fn union_words(words: &[RecognizedWord]) -> Option<Rect> {
+  words.iter().map(|word| word.bounds).reduce(Rect::union)
 }
 
-fn mean_confidence(words: &[Word]) -> Option<f32> {
+fn mean_confidence(words: &[RecognizedWord]) -> Option<f32> {
   let mut total = 0.0f32;
   let mut count = 0usize;
   for confidence in words.iter().filter_map(|word| word.confidence) {

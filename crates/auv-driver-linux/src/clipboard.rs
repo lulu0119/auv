@@ -18,13 +18,41 @@ pub fn snapshot(state: &Arc<Mutex<LinuxDriverSessionState>>) -> DriverResult<Str
 }
 
 /// Writes `snapshot` back to the clipboard as UTF-8 text.
+///
+/// The restored text is served by this process's portal session. GNOME's
+/// clipboard manager copies a new selection right away and keeps serving it
+/// after the owner leaves, so wait for that copy (at most a few hundred ms)
+/// before returning; a short-lived `auv invoke` otherwise left an empty
+/// clipboard behind.
 pub fn restore(state: &Arc<Mutex<LinuxDriverSessionState>>, snapshot: &str) -> DriverResult<()> {
-  with_clipboard_session(state, |session| session.set_text(snapshot))
+  with_clipboard_session(state, |session| {
+    let reads_before = session.served_reads();
+    session.set_text(snapshot)?;
+    session.settle_own_selection(reads_before);
+    Ok(())
+  })
 }
 
 /// Installs `text` as the clipboard's UTF-8 text payload.
 pub fn set_text(state: &Arc<Mutex<LinuxDriverSessionState>>, text: &str) -> DriverResult<()> {
   with_clipboard_session(state, |session| session.set_text(text))
+}
+
+/// Number of selection reads the clipboard session has served.
+pub fn served_reads(state: &Arc<Mutex<LinuxDriverSessionState>>) -> DriverResult<u64> {
+  with_clipboard_session(state, |session| Ok(session.served_reads()))
+}
+
+/// Waits for the compositor's own read of a selection we just set; returns
+/// the read count a paste reader is compared against.
+pub fn settle_own_selection(state: &Arc<Mutex<LinuxDriverSessionState>>, since: u64) -> DriverResult<u64> {
+  with_clipboard_session(state, |session| Ok(session.settle_own_selection(since)))
+}
+
+/// Waits for a paste shortcut's reader to finish reading the selection;
+/// returns whether anything read it after `since`.
+pub fn wait_for_paste_reader(state: &Arc<Mutex<LinuxDriverSessionState>>, since: u64) -> DriverResult<bool> {
+  with_clipboard_session(state, |session| Ok(session.wait_for_reader(since)))
 }
 
 fn with_clipboard_session<T>(

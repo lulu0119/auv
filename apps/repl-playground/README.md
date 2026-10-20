@@ -144,7 +144,7 @@ is the SDK's (`sdk.region`, `sdk.below`, … with the same rules as Rust's
 at its center.
 
 ```ts
-const music = await auv.windows.resolve({ bundleId: 'com.netease.163music' })
+const music = await auv.windows.resolve({ applicationId: 'com.netease.163music' })
 const search = area(music).region({ height: 36, left: 400, top: 32, width: 256 }).named('search')
 const results = area(music).region({ bottom: 80, left: '22%', top: 120 }) // % follows resizes
 draw(search) // editor only: outline it on the desktop canvas
@@ -165,7 +165,7 @@ the image; match bounds stay in screen space.
 const sidebar = area(music).region({ width: '30%' })
 const hits = await music.findText('Remember', { screenRegion: sidebar })
 const ocr = await auv.recognizeText((await music.capture()).capture!, { screenRegion: sidebar })
-await auv.macos.applications.activateBundleId({ bundleId: 'com.netease.163music' })
+await auv.applications.activate({ applicationId: 'com.netease.163music' })
 ```
 
 `focus(target, { zoom = true, autoZoomOut = true })` eases the desktop canvas
@@ -232,7 +232,7 @@ and focused first, so the text cannot land in another app.
 focus when they run, which can be this playground's browser.
 
 ```ts
-const music = await auv.windows.resolve({ bundleId: 'com.netease.163music' })
+const music = await auv.windows.resolve({ applicationId: 'com.netease.163music' })
 await music.click({ x: 528, y: 50 }) // the search box, window-relative
 await music.typeText('Reply 超时空辉夜姬')
 await music.pressKeys('return')

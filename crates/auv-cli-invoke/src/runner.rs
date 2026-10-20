@@ -2,6 +2,12 @@
 
 /// Reuse the existing polling policy for local OCR and selected Runner calls.
 /// Callers own capture and recognition, including cancellation between Driver calls.
+///
+/// NOTICE: The timeout bounds when a poll may start, not when it ends. Capture
+/// and OCR are synchronous Driver calls that cannot be cut short, so a poll
+/// that starts before the deadline runs to completion (one debug-build Wayland
+/// OCR took about 19 s). No poll starts after the deadline, and the sleep
+/// between polls never passes it.
 pub(crate) async fn wait_for_selected_text<R, Call, Future, HasMatches>(
   command_id: &str,
   query: &str,
@@ -22,12 +28,24 @@ where
     if has_matches(&response) {
       return Ok(response);
     }
-    if started.elapsed() >= options.timeout {
-      return Err(format!("{command_id} did not find text {query:?} before timeout"));
+    let remaining = options.timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+      // TODO(text-wait-timeout-evidence): report the recognized lines or the
+      // last capture with the failure. OcrMatches carries only matches, so
+      // this needs the recognition result to keep all lines first.
+      let scope = if command_id.starts_with("window.") {
+        "window"
+      } else {
+        "screen"
+      };
+      return Err(format!(
+        "{command_id} did not find text {query:?} within {} ms; capture the {scope} to check what is shown, or raise --timeout-ms",
+        options.timeout.as_millis()
+      ));
     }
     tokio::select! {
       _ = cancellation.cancelled() => return Err("invoke cancelled".to_string()),
-      _ = tokio::time::sleep(options.poll_interval) => {}
+      _ = tokio::time::sleep(options.poll_interval.min(remaining)) => {}
     }
   }
 }
@@ -87,6 +105,18 @@ pub async fn invoke(input: crate::InvokeCommandInput, context: auv::AuvContext) 
     .await
     .map_err(|error| format!("route core Runner for {command_id} failed: {error}"))?;
 
+  if command_id == "app.activate" {
+    let target = input.application_target()?.expect("validated target");
+    // Keep the typed failure: a Runner without activation (Linux) answers
+    // UNIMPLEMENTED, which must reach the caller as `unsupported`.
+    let result = runner.applications().activate(target, crate::commands::app::ACTIVATION_SETTLE).await.map_err(|error| {
+      let mut failure = crate::InvokeFailure::from(error);
+      failure.message = format!("ApplicationService/ActivateApplication failed: {}", failure.message);
+      failure
+    })?;
+    return crate::commands::app::activation_output(&result).map_err(Into::into);
+  }
+
   let result = match command_id {
     "input.pointerPosition" => runner
       .input()
@@ -94,21 +124,6 @@ pub async fn invoke(input: crate::InvokeCommandInput, context: auv::AuvContext) 
       .await
       .map_err(|status| format!("InputService/GetPointerPosition failed: {status}"))
       .and_then(|point| crate::commands::input::pointer_position_output(point.point())),
-    "app.activate" => {
-      let target = input.application_target()?.expect("validated target").trim();
-      runner
-        .macos()
-        .applications()
-        .activate_bundle_id(target, std::time::Duration::from_millis(150))
-        .await
-        .map_err(|status| format!("ApplicationService/ActivateBundleId failed: {status}"))
-        .and_then(|result| {
-          if result.requested_bundle_id != target {
-            return Err("ActivateBundleId response changed the requested bundle id".to_string());
-          }
-          crate::commands::app::activation_output(&result)
-        })
-    }
     "app.probePermissions" => runner
       .macos()
       .permissions()
@@ -270,15 +285,15 @@ pub async fn invoke(input: crate::InvokeCommandInput, context: auv::AuvContext) 
         }
       }
     },
-    "window.waitForText" => match input.inputs.get("query").cloned() {
-      None => Err("window.waitForText omitted its typed query argument".to_string()),
-      Some(query) => match runner.windows().resolve(selected_window_selector(&input)).await {
+    "window.waitForText" => match crate::commands::window::WaitForWindowTextArgs::decode(&input) {
+      Err(error) => Err(error),
+      Ok((query, options)) => match runner.windows().resolve(selected_window_selector(&input)).await {
         Err(status) => Err(format!("WindowService/ResolveWindow failed: {status}")),
         Ok(window) => {
           let response = wait_for_selected_text(
             command_id,
             &query,
-            auv_driver::WaitOptions::default(),
+            options,
             &input.cancellation,
             || {
               let window = window.clone();
@@ -345,14 +360,14 @@ pub async fn invoke(input: crate::InvokeCommandInput, context: auv::AuvContext) 
       }
       .await
     }
-    "screen.waitForText" => match input.inputs.get("query").cloned() {
-      None => Err("screen.waitForText omitted its typed query argument".to_string()),
-      Some(query) => {
+    "screen.waitForText" => match crate::commands::screen::WaitForScreenTextArgs::decode(&input) {
+      Err(error) => Err(error),
+      Ok((query, options)) => {
         let displays = runner.displays();
         let response = wait_for_selected_text(
           command_id,
           &query,
-          auv_driver::WaitOptions::default(),
+          options,
           &input.cancellation,
           || {
             let displays = displays.clone();
@@ -504,7 +519,7 @@ async fn selected_click_point(input: &crate::InvokeCommandInput, runner: &auv::c
   let requested_point = requested.point();
   let click_options = selected_click_options(input)?;
   match basis {
-    crate::commands::input::RelativeToArg::Screen => {
+    crate::commands::input::RelativeToArg::Screen if !crate::commands::input::targets_window(input.target.as_ref()) => {
       let response =
         runner.input().click(&requested, click_options).await.map_err(|status| format!("InputService/ClickPoint failed: {status}"))?;
       crate::emit_input_action_result(&response.action);
@@ -518,7 +533,7 @@ async fn selected_click_point(input: &crate::InvokeCommandInput, runner: &auv::c
         action: Some(response.action),
       })
     }
-    crate::commands::input::RelativeToArg::Window => {
+    crate::commands::input::RelativeToArg::Window | crate::commands::input::RelativeToArg::Screen => {
       let windows = runner.windows();
       let resolved = match input.target.as_ref().expect("window-relative target validated") {
         crate::ExecutionTarget::Application { .. } => {
@@ -530,18 +545,24 @@ async fn selected_click_point(input: &crate::InvokeCommandInput, runner: &auv::c
         crate::ExecutionTarget::Display { .. } => unreachable!("target/basis validated"),
       };
       let window = resolved.resource();
-      let point = crate::commands::input::resolve_local_point(
-        "input.clickPoint",
-        requested_point.x,
-        requested_point.y,
-        normalized,
-        window.frame.size,
-        "window",
-      )?;
-      let response = resolved
-        .click(auv_driver::WindowPoint::new(point.x, point.y), click_options)
-        .await
-        .map_err(|status| format!("InputService/ClickPoint failed: {status}"))?;
+      let target: auv::client::runner::PointerTarget = if basis == crate::commands::input::RelativeToArg::Screen {
+        crate::commands::input::screen_point_in_window("input.clickPoint", requested_point, window.frame)?;
+        // Send the screen point itself: the Runner converts it with the frame
+        // it reads at delivery, so a window that moved since ResolveWindow
+        // still gets the requested screen point.
+        auv_driver::ScreenPoint::new(requested_point.x, requested_point.y).into()
+      } else {
+        let point = crate::commands::input::resolve_local_point(
+          "input.clickPoint",
+          requested_point.x,
+          requested_point.y,
+          normalized,
+          window.frame.size,
+          "window",
+        )?;
+        auv_driver::WindowPoint::new(point.x, point.y).into()
+      };
+      let response = resolved.click(target, click_options).await.map_err(|status| format!("InputService/ClickPoint failed: {status}"))?;
       crate::emit_input_action_result(&response.action);
       crate::commands::input::click_point_output(crate::commands::input::ClickPointResult {
         relative_to: basis.as_str().to_string(),
@@ -692,10 +713,11 @@ fn selected_window_selector(input: &crate::InvokeCommandInput) -> auv_driver::Wi
     .target
     .as_ref()
     .and_then(crate::ExecutionTarget::application_id)
-    // TODO(cross-platform-application-selector): Application targets currently
-    // carry bundle/accessibility ids. Add an explicit application-name target
-    // only through an owner-approved target-contract extension.
-    .map(|bundle_id| auv_driver::App::bundle_id(bundle_id.to_string()))
+    // TODO(application-name-target): application targets carry platform
+    // application ids, never application names. Add an explicit
+    // application-name target only through an owner-approved target contract
+    // extension.
+    .map(|application_id| auv_driver::App::id(application_id.to_string()))
     .unwrap_or_else(auv_driver::App::frontmost);
   let title =
     input.inputs.get("title").filter(|title| !title.trim().is_empty()).map(|title| auv_driver::TextMatcher::Contains(title.clone()));
@@ -734,9 +756,7 @@ async fn runner_keyboard_target(
 ) -> Result<auv_driver::InputTarget, crate::InvokeFailure> {
   let target = match input.target.as_ref() {
     None => auv_driver::InputTarget::Foreground,
-    Some(crate::ExecutionTarget::Application { id }) => auv_driver::InputTarget::Application {
-      bundle_id: id.clone(),
-    },
+    Some(crate::ExecutionTarget::Application { id }) => auv_driver::InputTarget::Application { id: id.clone() },
     Some(crate::ExecutionTarget::Window { id }) => auv_driver::InputTarget::Window(runner.windows().get(id).await?.resource().clone()),
     Some(crate::ExecutionTarget::Display { .. }) => unreachable!("target policy validated"),
   };
@@ -891,19 +911,19 @@ async fn execute_drag(input: crate::InvokeCommandInput, context: auv::AuvContext
   let runner = run.runner(auv::client::RunnerOptions::default()).await.map_err(|error| error.to_string())?;
 
   let (mut result, target) = match plan.basis {
-    RelativeToArg::Screen => {
+    RelativeToArg::Screen if !crate::commands::input::targets_window(input.target.as_ref()) => {
       let start = auv_driver::ScreenPoint::new(plan.start.x, plan.start.y);
       let end = auv_driver::ScreenPoint::new(plan.end.x, plan.end.y);
       (DragResult::planned(&plan, start, end), auv_driver::InputTarget::Foreground)
     }
-    RelativeToArg::Window => {
+    RelativeToArg::Window | RelativeToArg::Screen => {
       let windows = runner.windows();
       let window = match input.target.as_ref().expect("window-relative target validated") {
         crate::ExecutionTarget::Application { .. } => windows.resolve(selected_window_selector(&input)).await?.resource().clone(),
         crate::ExecutionTarget::Window { id } => windows.get(id).await?.resource().clone(),
         crate::ExecutionTarget::Display { .. } => unreachable!("target/basis validated"),
       };
-      let (start, end) = plan.screen_points(window.frame, "window")?;
+      let (start, end) = plan.window_screen_points(window.frame)?;
       let mut result = DragResult::planned(&plan, start, end);
       result.window = Some(window.clone());
       (result, auv_driver::InputTarget::Window(window))

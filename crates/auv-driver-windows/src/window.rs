@@ -118,13 +118,29 @@ fn resolve_from_windows(windows: &[Window], selector: &WindowSelector) -> Driver
         (window.frame.size.width * window.frame.size.height).round() as i64,
       ))
     });
-    return matches.first().map(|window| (*window).clone()).ok_or_else(|| not_found("main visible window"));
+    return matches.first().map(|window| (*window).clone()).ok_or_else(|| missing_window(windows, selector, "main visible window"));
   }
 
   match matches.as_slice() {
     [window] => Ok((*window).clone()),
-    [] => Err(not_found("window selector")),
+    [] => Err(missing_window(windows, selector, "window selector")),
     _ => Err(invalid_input(format!("window selector was ambiguous: {} windows matched", matches.len()))),
+  }
+}
+
+/// Names the visible applications when an application selector matched no
+/// window, so the caller sees which ids it could use.
+fn missing_window(windows: &[Window], selector: &WindowSelector, target: &str) -> auv_driver_common::error::DriverError {
+  match &selector.app {
+    Some(app) if !app.frontmost && (app.id.is_some() || app.name.is_some()) => {
+      let owned = windows.iter().any(|window| window.is_visible && matches_app_selector(window, app));
+      if owned {
+        not_found(target)
+      } else {
+        auv_driver_common::window::application_not_found(app, windows)
+      }
+    }
+    _ => not_found(target),
   }
 }
 
@@ -155,31 +171,35 @@ fn matches_app_selector(window: &Window, selector: &AppSelector) -> bool {
   {
     return false;
   }
-  // NOTICE: app_bundle_id is a macOS concept and is always None on Windows, so
-  // a bundle matcher can never match here. Selectors should use name or pid.
-  if let Some(bundle) = &selector.bundle {
-    let Some(app_bundle_id) = &window.app_bundle_id else {
-      return false;
-    };
-    if !matches_text(app_bundle_id, bundle) {
-      return false;
-    }
-  }
-  if let Some(name) = &selector.name {
-    let Some(app_name) = &window.app_name else {
-      return false;
-    };
-    // NOTICE: `app_name` is an executable file name, and Windows file names are case-insensitive:
-    // the same program is `Notepad.exe` on disk and `notepad.exe` to the person typing it.
-    let matched = match name {
-      TextMatcher::Exact(expected) => app_name.eq_ignore_ascii_case(expected),
-      TextMatcher::Contains(needle) => app_name.to_ascii_lowercase().contains(&needle.to_ascii_lowercase()),
-    };
-    if !matched {
+  // NOTICE: a Windows application id is its executable file name, the APP of
+  // `window.list` (`application_id` is always `None`). The CLI's local path
+  // selects it by name and a Runner client by application id, so both match
+  // the executable name; see `matches_executable`.
+  for matcher in [&selector.id, &selector.name].into_iter().flatten() {
+    if !window.app_name.as_deref().is_some_and(|app_name| matches_executable(app_name, matcher)) {
       return false;
     }
   }
   true
+}
+
+/// Matches an executable file name. Windows file names are case-insensitive
+/// (the same program is `Notepad.exe` on disk and `notepad.exe` to the person
+/// typing it), and an exact name may leave out `.exe` (`notepad`).
+pub(crate) fn matches_executable(app_name: &str, matcher: &TextMatcher) -> bool {
+  match matcher {
+    TextMatcher::Exact(expected) => {
+      app_name.eq_ignore_ascii_case(expected) || without_exe_suffix(app_name).eq_ignore_ascii_case(without_exe_suffix(expected))
+    }
+    TextMatcher::Contains(needle) => app_name.to_ascii_lowercase().contains(&needle.to_ascii_lowercase()),
+  }
+}
+
+fn without_exe_suffix(value: &str) -> &str {
+  match value.len().checked_sub(4) {
+    Some(split) if value.is_char_boundary(split) && value[split..].eq_ignore_ascii_case(".exe") => &value[..split],
+    _ => value,
+  }
 }
 
 fn matches_text(value: &str, matcher: &TextMatcher) -> bool {
@@ -205,7 +225,7 @@ mod native {
   };
   use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SW_RESTORE, SetForegroundWindow, ShowWindow,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
   };
   use windows::core::PWSTR;
 
@@ -285,7 +305,18 @@ mod native {
       && target_thread != foreground_thread
       && unsafe { AttachThreadInput(current_thread, target_thread, true) }.as_bool();
     unsafe {
-      let _ = ShowWindow(hwnd, SW_RESTORE);
+      // NOTICE: SW_RESTORE also turns a maximized window back into a normal one,
+      // which moved the window under a click point computed from its frame
+      // before activation. Only a minimized window needs restoring; SW_SHOW
+      // keeps the activate-and-show side effect at the current size.
+      let _ = ShowWindow(
+        hwnd,
+        if IsIconic(hwnd).as_bool() {
+          SW_RESTORE
+        } else {
+          SW_SHOW
+        },
+      );
       let _ = BringWindowToTop(hwnd);
     }
     let activated = unsafe { SetForegroundWindow(hwnd) }.as_bool() || unsafe { GetForegroundWindow() } == hwnd;
@@ -339,8 +370,11 @@ mod native {
       },
       title: window_title(hwnd),
       app_name: process_name(pid),
-      // NOTICE: app_bundle_id is macOS-only; Windows has no equivalent.
-      app_bundle_id: None,
+      // TODO(windows-application-id): selectors already match an application
+      // id against the executable name in app_name. Reporting it here too
+      // changes what readers of application_id see (window.list, missing
+      // window hints, readiness), so it waits for an owner-approved slice.
+      application_id: None,
       process_id: (pid != 0).then_some(pid),
       frame,
       coordinate_space: CoordinateSpace::Screen,

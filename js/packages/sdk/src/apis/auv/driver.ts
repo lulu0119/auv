@@ -9,7 +9,7 @@ import type {
 import type { DurationSchema } from '@bufbuild/protobuf/wkt'
 
 import type { FocusTextRequestSchema } from '../../gen/auv/api/driver/macos/v1/accessibility_pb'
-import type { ActivateBundleIdRequestSchema } from '../../gen/auv/api/driver/macos/v1/application_pb'
+import type { ActivateApplicationRequestSchema } from '../../gen/auv/api/driver/v1/application_pb'
 import type { CaptureRefSchema, CaptureResolution, GetCaptureImageRequestSchema, ImageFrameSchema } from '../../gen/auv/api/driver/v1/capture_pb'
 import type { Display, DisplaySelectorSchema } from '../../gen/auv/api/driver/v1/display_pb'
 import type { PositionSchema, ScreenRectSchema } from '../../gen/auv/api/driver/v1/geometry_pb'
@@ -51,9 +51,9 @@ import type { WithMillis } from './duration'
 import { create } from '@bufbuild/protobuf'
 
 import { AccessibilityService } from '../../gen/auv/api/driver/macos/v1/accessibility_pb'
-import { ApplicationService } from '../../gen/auv/api/driver/macos/v1/application_pb'
 import { MediaControlService } from '../../gen/auv/api/driver/macos/v1/media_control_pb'
 import { PermissionService } from '../../gen/auv/api/driver/macos/v1/permission_pb'
+import { ApplicationService } from '../../gen/auv/api/driver/v1/application_pb'
 import { CaptureService } from '../../gen/auv/api/driver/v1/capture_pb'
 import { DisplayService } from '../../gen/auv/api/driver/v1/display_pb'
 import { InputPolicy, InputService } from '../../gen/auv/api/driver/v1/input_pb'
@@ -116,6 +116,16 @@ export type RecognitionSource = CaptureTarget | { frame: Init<typeof ImageFrameS
 export interface RecognizeTextOptions extends InputFields<typeof RecognizeTextRequestSchema, 'source'>, OperationOptions {}
 
 export interface RunnerClient {
+  readonly applications: {
+    /**
+     * Brings an application to the front by the application ID that
+     * `windows.list` reports on the Runner's platform: a bundle ID on macOS,
+     * a process image name on Windows. The response names the ID kind, the
+     * activation method and whether the application was then observed in
+     * front. Linux Runners reject the call as UNIMPLEMENTED.
+     */
+    activate: (request: Init<typeof ActivateApplicationRequestSchema>, options?: OperationOptions) => Promise<Shape<typeof ApplicationService.method.activateApplication.output>>
+  }
   /**
    * Explicit pixel access. Captures return a reference and metadata; pixels
    * leave the Runner only through this call. A reference fails with
@@ -169,9 +179,6 @@ export interface RunnerClient {
     readonly accessibility: {
       focusText: (request: Init<typeof FocusTextRequestSchema>, options?: OperationOptions) => Promise<Shape<typeof AccessibilityService.method.focusText.output>>
     }
-    readonly applications: {
-      activateBundleId: (request: Init<typeof ActivateBundleIdRequestSchema>, options?: OperationOptions) => Promise<Shape<typeof ApplicationService.method.activateBundleId.output>>
-    }
     readonly media: {
       nextTrack: (options?: OperationOptions) => Promise<Shape<typeof MediaControlService.method.nextTrack.output>>
       nowPlaying: (options?: OperationOptions) => Promise<Shape<typeof MediaControlService.method.getNowPlaying.output>>
@@ -206,7 +213,7 @@ export interface RunnerClient {
     /** Lists windows as ready-to-use clients carrying their metadata. */
     list: (options?: OperationOptions) => Promise<readonly WindowClient[]>
     /**
-     * The window a selector names, such as `{ bundleId: 'com.apple.TextEdit' }`
+     * The window a selector names, such as `{ applicationId: 'com.apple.TextEdit' }`
      * for that app's main visible window. Takes a `WindowQuery` or the full
      * `WindowSelector`.
      */
@@ -359,8 +366,8 @@ const GRPC_NOT_FOUND = 5
  * no title, its main visible window.
  */
 export interface WindowQuery {
+  applicationId?: string
   appName?: string
-  bundleId?: string
   /** The frontmost app; the default when no application field is given. */
   frontmost?: boolean
   pid?: number
@@ -563,6 +570,9 @@ export function createRunnerClient(connection: AuvConnection, route: RunnerRoute
   }
 
   return {
+    applications: {
+      activate: (request, options) => unary(ApplicationService.method.activateApplication, request, options),
+    },
     captures: {
       image: async (capture, options = {}) => {
         const { signal, ...request } = options
@@ -605,9 +615,6 @@ export function createRunnerClient(connection: AuvConnection, route: RunnerRoute
     macos: {
       accessibility: {
         focusText: (request, options) => unary(AccessibilityService.method.focusText, request, options),
-      },
-      applications: {
-        activateBundleId: (request, options) => unary(ApplicationService.method.activateBundleId, request, options),
       },
       media: {
         nextTrack: options => unary(MediaControlService.method.nextTrack, {}, options),
@@ -737,7 +744,7 @@ function windowSelectorOf(selector: Init<typeof WindowSelectorSchema> | WindowQu
     return selector as Init<typeof WindowSelectorSchema>
   const query = selector as WindowQuery
   const applications = [
-    query.bundleId === undefined ? undefined : { case: 'applicationBundleId' as const, value: query.bundleId },
+    query.applicationId === undefined ? undefined : { case: 'applicationId' as const, value: query.applicationId },
     query.appName === undefined ? undefined : { case: 'applicationName' as const, value: query.appName },
     query.pid === undefined ? undefined : { case: 'processId' as const, value: query.pid },
     query.frontmost ? { case: 'frontmostApplication' as const, value: true } : undefined,
@@ -747,7 +754,7 @@ function windowSelectorOf(selector: Init<typeof WindowSelectorSchema> | WindowQu
     query.titleContains === undefined ? undefined : { case: 'titleContains' as const, value: query.titleContains },
   ].filter(value => value !== undefined)
   if (applications.length > 1)
-    throw new TypeError('WindowQuery takes one of bundleId, appName, pid and frontmost')
+    throw new TypeError('WindowQuery takes one of applicationId, appName, pid and frontmost')
   if (windows.length > 1)
     throw new TypeError('WindowQuery takes one of title and titleContains')
   return {

@@ -15,6 +15,7 @@ const ACCESSIBLE_IFACE: &str = "org.a11y.atspi.Accessible";
 const ACTION_IFACE: &str = "org.a11y.atspi.Action";
 const COMPONENT_IFACE: &str = "org.a11y.atspi.Component";
 const SELECTION_IFACE: &str = "org.a11y.atspi.Selection";
+const STATE_ACTIVE: u32 = 1;
 const STATE_FOCUSED: u32 = 12;
 const COORD_TYPE_SCREEN: u32 = 0;
 const COORD_TYPE_WINDOW: u32 = 1;
@@ -97,6 +98,8 @@ struct Accessible {
   role: String,
   child_count: i32,
   focused: bool,
+  /// AT-SPI ACTIVE: the top-level window that has keyboard focus.
+  active: bool,
   bounds: Rect,
 }
 
@@ -116,13 +119,55 @@ pub fn list_windows() -> DriverResult<Vec<Window>> {
     for child in children(&connection, &app.reference)? {
       let accessible = accessible(&connection, child)?;
       if matches!(accessible.role.as_str(), "window" | "frame" | "dialog") && rect_has_area(accessible.bounds) {
-        windows.push(window_from_accessible(&app, &accessible, windows.is_empty()));
+        // Only the first active window is main, matching `active_window`, even
+        // if a toolkit leaves a stale ACTIVE state on another window.
+        let is_main = accessible.active && !windows.iter().any(|window: &Window| window.is_main);
+        windows.push(window_from_accessible(&app, &accessible, is_main));
       }
     }
+  }
+  // The active (keyboard-focused) top-level window is the main one, so a
+  // modal dialog wins over the frame behind it. When no listed window is
+  // active, the first window stays main as before.
+  if !windows.iter().any(|window| window.is_main)
+    && let Some(first) = windows.first_mut()
+  {
+    first.is_main = true;
   }
   apply_shell_stage_window_origins(&connection, &applications, &mut windows);
 
   Ok(windows)
+}
+
+/// The top-level window AT-SPI marks active (the one with keyboard focus), if
+/// any application exposes one.
+pub fn active_window() -> DriverResult<Option<Window>> {
+  let connection = connect()?;
+  let root = ObjectRef {
+    dest: REGISTRY_DEST.to_string(),
+    path: ROOT_PATH.to_string(),
+  };
+  for reference in children(&connection, &root)? {
+    // One stale or unresponsive application must not hide the active window.
+    let Ok(Some(app)) = application(&connection, reference) else {
+      continue;
+    };
+    let Ok(windows) = children(&connection, &app.reference) else {
+      continue;
+    };
+    for child in windows {
+      let Ok(proxy) = accessible_proxy(&connection, &child) else {
+        continue;
+      };
+      let active = state_contains(&proxy, STATE_ACTIVE).unwrap_or(false);
+      drop(proxy);
+      if active {
+        let accessible = accessible(&connection, child)?;
+        return Ok(Some(window_from_accessible(&app, &accessible, true)));
+      }
+    }
+  }
+  Ok(None)
 }
 
 pub fn snapshot_window(window: &Window) -> DriverResult<TreeSnapshot> {
@@ -260,7 +305,9 @@ fn accessible(connection: &Connection, reference: ObjectRef) -> DriverResult<Acc
   let name = property_string(&proxy, "Name").unwrap_or_default();
   let description = property_string(&proxy, "Description").unwrap_or_default();
   let accessible_id = property_string(&proxy, "AccessibleId").unwrap_or_default();
-  let focused = state_contains(&proxy, STATE_FOCUSED).unwrap_or(false);
+  let states = state_set(&proxy).unwrap_or_default();
+  let focused = state_set_contains(&states, STATE_FOCUSED);
+  let active = state_set_contains(&states, STATE_ACTIVE);
   drop(proxy);
   let bounds = extents(connection, &reference, COORD_TYPE_SCREEN).unwrap_or_default();
   Ok(Accessible {
@@ -270,6 +317,7 @@ fn accessible(connection: &Connection, reference: ObjectRef) -> DriverResult<Acc
     role,
     child_count,
     focused,
+    active,
     bounds,
     reference,
   })
@@ -448,8 +496,17 @@ fn property_string(proxy: &Proxy<'_>, name: &str) -> DriverResult<String> {
 }
 
 fn state_contains(proxy: &Proxy<'_>, state: u32) -> DriverResult<bool> {
-  let states: Vec<u32> = proxy.call("GetState", &()).map_err(|error| backend(format!("failed to read AT-SPI state: {error}")))?;
-  Ok(states.contains(&state))
+  Ok(state_set_contains(&state_set(proxy)?, state))
+}
+
+fn state_set(proxy: &Proxy<'_>) -> DriverResult<Vec<u32>> {
+  proxy.call("GetState", &()).map_err(|error| backend(format!("failed to read AT-SPI state: {error}")))
+}
+
+/// AT-SPI `GetState` returns the state set as a 64-bit bitfield split into
+/// two `u32` words (`au`), where state `n` is bit `n % 32` of word `n / 32`.
+fn state_set_contains(words: &[u32], state: u32) -> bool {
+  words.get((state / 32) as usize).is_some_and(|word| word & (1 << (state % 32)) != 0)
 }
 
 fn window_from_accessible(app: &Application, accessible: &Accessible, is_main: bool) -> Window {
@@ -460,9 +517,8 @@ fn window_from_accessible(app: &Application, accessible: &Accessible, is_main: b
     title: non_empty(accessible.name.clone()),
     app_name: non_empty(app.name.clone()),
     // NOTICE(linux-atspi-app-id): AT-SPI exposes Linux desktop application ids
-    // through AccessibleId. This reuses the shared app_bundle_id field until a
-    // platform-neutral app identity field is approved in auv-driver.
-    app_bundle_id: non_empty(app.accessible_id.clone()),
+    // through the application's AccessibleId.
+    application_id: non_empty(app.accessible_id.clone()),
     process_id: None,
     frame: accessible.bounds,
     coordinate_space: CoordinateSpace::Screen,

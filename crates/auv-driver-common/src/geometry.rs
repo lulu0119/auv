@@ -309,6 +309,25 @@ impl Rect {
       && self.contains_point(Point::new(other.origin.x + other.size.width, other.origin.y + other.size.height))
   }
 
+  /// The smallest whole-unit rectangle that covers this one: the origin
+  /// rounds down and the far edges round up. Capture backends that address
+  /// whole units (pixels, or points on macOS) use it for regions derived from OCR or layout bounds, which
+  /// are routinely fractional.
+  pub fn round_out(self) -> Self {
+    let x = self.origin.x.floor();
+    let y = self.origin.y.floor();
+    Self::new(x, y, (self.origin.x + self.size.width).ceil() - x, (self.origin.y + self.size.height).ceil() - y)
+  }
+
+  /// The smallest rectangle that encloses both rectangles.
+  pub fn union(self, other: Rect) -> Self {
+    let x = self.origin.x.min(other.origin.x);
+    let y = self.origin.y.min(other.origin.y);
+    let right = (self.origin.x + self.size.width).max(other.origin.x + other.size.width);
+    let bottom = (self.origin.y + self.size.height).max(other.origin.y + other.size.height);
+    Self::new(x, y, right - x, bottom - y)
+  }
+
   /// The overlap of two rectangles, or `None` when they share no area
   /// (touching edges do not).
   pub fn intersect(self, other: Rect) -> Option<Self> {

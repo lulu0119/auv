@@ -72,6 +72,8 @@ fn click_modifiers_map_to_standard_platform_keys() {
 // ROOT CAUSE: direct type_text used to resolve characters after emitting the
 // replace shortcut and preceding characters. Reject the whole request before
 // contacting a backend, using the same prepared plan as batch delivery.
+// (Non-ASCII text now pastes instead; an ASCII control character still has
+// no key.)
 #[test]
 fn direct_type_text_rejects_invalid_tail_before_opening_backend() {
   use auv_driver_common::Driver;
@@ -79,7 +81,7 @@ fn direct_type_text_rejects_invalid_tail_before_opening_backend() {
   let error = session
     .input()
     .type_text(
-      "prefix漢",
+      "prefix\u{7}",
       TypeTextOptions {
         replace_existing: true,
         ..Default::default()
@@ -114,11 +116,14 @@ fn prepared_text_retains_replace_submit_and_per_character_timing() {
       (&[][..], keysym::RETURN, Duration::ZERO),
     ]
   );
-  let paste = KeyboardPlan::paste_text(&PasteTextOptions {
-    replace_existing: true,
-    submit: TextSubmit::Return,
-    ..Default::default()
-  });
+  let paste = KeyboardPlan::paste_text(
+    &PasteTextOptions {
+      replace_existing: true,
+      submit: TextSubmit::Return,
+      ..Default::default()
+    },
+    false,
+  );
   assert_eq!(
     paste.steps.iter().map(|(chord, _)| (chord.modifiers.as_slice(), chord.key)).collect::<Vec<_>>(),
     vec![
@@ -129,6 +134,21 @@ fn prepared_text_retains_replace_submit_and_per_character_timing() {
   );
 }
 
+// ROOT CAUSE:
+//
+// If an agent spelled punctuation out (`ctrl+comma`), the Linux key parser
+// failed with `invalid key comma` because a multi-character name had to be in
+// the named-key table.
+//
+// The fix resolves spelled-out names through the shared key names.
+#[test]
+fn spelled_out_punctuation_resolves_to_its_character_keysym() {
+  assert_eq!(keysym::named_or_char("comma").unwrap(), ',' as i32);
+  assert_eq!(keysym::named_or_char("bracket_left").unwrap(), '[' as i32);
+  assert_eq!(keysym::named_or_char("plus").unwrap(), '+' as i32);
+  assert!(keysym::named_or_char("nope").is_err());
+}
+
 #[test]
 fn shared_key_symbols_preserve_linux_named_key_behavior() {
   assert_eq!(keysym::named_or_char("enter").unwrap(), auv_driver_common::Keysym::Return.raw() as i32);
@@ -137,4 +157,49 @@ fn shared_key_symbols_preserve_linux_named_key_behavior() {
   assert!(keysym::named_or_char("F13").is_err());
   assert!(keysym::named_or_char("forward_delete").is_err());
   assert!(keysym::named_or_char("play_pause").is_err());
+}
+
+// ROOT CAUSE:
+//
+// If input.pasteText targeted GNOME Terminal on Wayland, the driver sent
+// Ctrl+V, which bash reads as quoted-insert, so the pasted command never
+// appeared even though the clipboard was read.
+//
+// The fix sends Ctrl+Shift+V when the focused window is a terminal emulator.
+#[test]
+fn terminal_paste_uses_ctrl_shift_v() {
+  let paste = KeyboardPlan::paste_text(&PasteTextOptions::default(), true);
+  assert_eq!(
+    paste.steps.iter().map(|(chord, _)| (chord.modifiers.as_slice(), chord.key)).collect::<Vec<_>>(),
+    vec![(&[keysym::CONTROL_L, keysym::SHIFT_L][..], 'v' as i32)]
+  );
+  assert!(auv_driver_common::is_terminal_emulator("org.gnome.Terminal"));
+  assert!(auv_driver_common::is_terminal_emulator("org.gnome.Console"));
+  assert!(!auv_driver_common::is_terminal_emulator("org.gnome.TextEditor"));
+}
+
+// ROOT CAUSE:
+//
+// If typeText received non-ASCII text on Linux (CJK, accents), keysym typing
+// failed with "only supports ASCII text" and nothing was typed. The fix pastes
+// such text, keeping replace/submit/settle, and records the keysym attempt.
+#[test]
+fn non_ascii_text_is_typed_through_the_clipboard() {
+  assert!(keysym_typeable("hello, world\n"));
+  assert!(!keysym_typeable("中文 café"));
+  let paste = paste_options_for_text(
+    "中文",
+    TypeTextOptions {
+      replace_existing: true,
+      submit: TextSubmit::Return,
+      settle: Duration::from_millis(5),
+      ..Default::default()
+    },
+  );
+  assert_eq!(paste.text, "中文");
+  assert!(paste.replace_existing);
+  assert_eq!(paste.submit, TextSubmit::Return);
+  assert_eq!(paste.settle, Duration::from_millis(5));
+  let result = typed_through_paste(keyboard_result());
+  assert!(!result.attempts[0].succeeded);
 }

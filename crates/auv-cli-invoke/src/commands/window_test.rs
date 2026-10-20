@@ -11,7 +11,7 @@ fn window_list_report_uses_human_first_table_and_wide_diagnostic_columns() {
       },
       title: Some("Project Notes".to_string()),
       app_name: Some("TextEdit".to_string()),
-      app_bundle_id: Some("com.apple.TextEdit".to_string()),
+      application_id: Some("com.apple.TextEdit".to_string()),
       process_id: Some(1234),
       frame: Rect::new(12.0, 34.0, 640.0, 480.0),
       coordinate_space: CoordinateSpace::Screen,
@@ -24,7 +24,7 @@ fn window_list_report_uses_human_first_table_and_wide_diagnostic_columns() {
       },
       title: None,
       app_name: None,
-      app_bundle_id: None,
+      application_id: None,
       process_id: None,
       frame: Rect::new(-100.0, 20.0, 300.0, 200.0),
       coordinate_space: CoordinateSpace::Screen,
@@ -42,7 +42,7 @@ fn window_list_report_uses_human_first_table_and_wide_diagnostic_columns() {
   assert_eq!(report.tables[0].display_max_chars, [None, Some(18), Some(40), None]);
   assert_eq!(report.tables[0].rows[0].cells, ["window_10", "TextEdit", "Project Notes", "12,34 640x480"]);
   assert_eq!(report.tables[0].rows[1].cells, ["window_11", "unknown", "untitled", "-100,20 300x200"]);
-  assert_eq!(report.wide_tables[0].columns, ["REF", "APP", "TITLE", "FRAME", "BUNDLE", "PID", "FLAGS"]);
+  assert_eq!(report.wide_tables[0].columns, ["REF", "APP", "TITLE", "FRAME", "APP ID", "PID", "FLAGS"]);
   assert_eq!(report.wide_tables[0].display_max_chars, [None, Some(18), Some(40), None, Some(32), None, None]);
   assert_eq!(report.wide_tables[0].rows[0].cells[4], "com.apple.TextEdit");
   assert_eq!(report.wide_tables[0].rows[0].cells[5], "1234");
@@ -55,14 +55,14 @@ fn window_list_report_uses_human_first_table_and_wide_diagnostic_columns() {
 fn window_list_report_preserves_full_cell_values_for_human_rendering() {
   let long_title = "Fixture Window Title With Enough Words To Exceed The Human Display Limit".to_string();
   let long_app_name = "Fixture Application Name Beyond Human Display Limit".to_string();
-  let long_bundle_id = "com.example.fixture.application.identifier.with.extra.segments".to_string();
+  let long_application_id = "com.example.fixture.application.identifier.with.extra.segments".to_string();
   let windows = vec![Window {
     reference: WindowRef {
       id: "window_long".to_string(),
     },
     title: Some(long_title.clone()),
     app_name: Some(long_app_name.clone()),
-    app_bundle_id: Some(long_bundle_id.clone()),
+    application_id: Some(long_application_id.clone()),
     process_id: Some(4321),
     frame: Rect::new(1.0, 2.0, 3.0, 4.0),
     coordinate_space: CoordinateSpace::Screen,
@@ -75,7 +75,7 @@ fn window_list_report_preserves_full_cell_values_for_human_rendering() {
 
   assert_eq!(report.tables[0].rows[0].cells[1], long_app_name);
   assert_eq!(report.tables[0].rows[0].cells[2], long_title);
-  assert_eq!(report.wide_tables[0].rows[0].cells[4], long_bundle_id);
+  assert_eq!(report.wide_tables[0].rows[0].cells[4], long_application_id);
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -88,7 +88,7 @@ fn window_text_result_keeps_resolved_window_and_ocr_matches_together() {
       },
       title: Some("Fixture".to_string()),
       app_name: Some("Fixture App".to_string()),
-      app_bundle_id: Some("com.example.Fixture".to_string()),
+      application_id: Some("com.example.Fixture".to_string()),
       process_id: Some(42),
       frame: Rect::new(10.0, 20.0, 640.0, 480.0),
       coordinate_space: CoordinateSpace::Screen,
@@ -138,7 +138,7 @@ fn recorded_window_text_click_result_keeps_resolution_and_delivery_together() {
       },
       title: Some("Fixture".to_string()),
       app_name: Some("Fixture App".to_string()),
-      app_bundle_id: Some("com.example.Fixture".to_string()),
+      application_id: Some("com.example.Fixture".to_string()),
       process_id: Some(42),
       frame: Rect::new(10.0, 20.0, 640.0, 480.0),
       coordinate_space: CoordinateSpace::Screen,
@@ -285,6 +285,7 @@ fn window_observation_commands_are_not_gated_out_on_windows() {
     (capture_window_invoke_command(), dry_run_input("window.capture", Some("notepad.exe"), None)),
     (find_window_text_invoke_command(), dry_run_input("window.findText", Some("notepad.exe"), Some("Save"))),
     (wait_for_window_text_invoke_command(), dry_run_input("window.waitForText", Some("notepad.exe"), Some("Saved"))),
+    (click_window_text_invoke_command(), dry_run_input("window.clickText", Some("notepad.exe"), Some("Save"))),
   ];
 
   for (command, input) in commands {
@@ -295,24 +296,24 @@ fn window_observation_commands_are_not_gated_out_on_windows() {
 
 // ROOT CAUSE:
 //
-// If `window.clickText` ran on Linux or Windows, where its cell is `Unsupported`
-// (`TODO(invoke-window-click-text-windows)`), the refusal reached the caller as `command_failed`,
-// because the handler returned a plain `String` and `InvokeFailure::from(String)` assigns that code.
+// If `window.clickText` ran on Linux, where its cell is `Unsupported`, the refusal reached the
+// caller as `command_failed`, because the handler returned a plain `String` and
+// `InvokeFailure::from(String)` assigns that code.
 //
 // Before the fix, a caller could not tell a platform without a path from a click that failed. The
 // fix keeps the refusal typed as `unsupported`, and the command still refuses instead of clicking
 // through foreground input.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
-fn window_click_text_refuses_as_unsupported_off_macos() {
+fn window_click_text_refuses_as_unsupported_on_linux() {
   let input = dry_run_input("window.clickText", Some("notepad.exe"), Some("Save"));
 
   let outcome = futures_executor::block_on(click_window_text_invoke_command().invoke(input));
 
-  // A dry run returns before platform access on macOS; elsewhere the handler is not compiled in.
+  // A dry run returns before platform access on macOS and Windows; elsewhere the handler is not compiled in.
   let error = outcome.expect_err("window.clickText has no path here");
   assert_eq!(error.code, crate::FailureCode::Unsupported, "unexpected refusal: {}", error.message);
-  assert!(error.message.contains("only available on macOS"), "unexpected message: {}", error.message);
+  assert!(error.message.contains("only available on macOS and Windows"), "unexpected message: {}", error.message);
 }
 
 // Same root cause as above: on Linux, where their cells are `Unsupported`, `window.findText` and
@@ -333,8 +334,8 @@ fn window_text_commands_refuse_as_unsupported_on_linux() {
   }
 }
 
-// On Windows an application is its executable file name: `app_bundle_id` is always `None`, so a
-// bundle selector could never match.
+// On Windows an application is its executable file name, the `app_name` of `window.list`;
+// `application_id` is always `None` (TODO(windows-application-id)).
 #[cfg(target_os = "windows")]
 #[test]
 fn window_selector_names_the_executable_on_windows() {

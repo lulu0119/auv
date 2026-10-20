@@ -110,6 +110,18 @@ pub mod portal {
     pub fn set_text(&mut self, _text: &str) -> DriverResult<()> {
       Err(DriverError::unsupported("linux.portal.clipboard"))
     }
+
+    pub fn served_reads(&self) -> u64 {
+      0
+    }
+
+    pub fn wait_for_reader(&self, _since: u64) -> bool {
+      false
+    }
+
+    pub fn settle_own_selection(&self, since: u64) -> u64 {
+      since
+    }
   }
 
   #[derive(Debug, Default)]

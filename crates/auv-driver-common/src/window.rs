@@ -6,6 +6,7 @@ use crate::{
   error::{DriverError, DriverResult},
   geometry::{CoordinateSpace, Point, Rect, Size},
   input::DisturbanceLevel,
+  selector::{AppSelector, TextMatcher},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -18,7 +19,10 @@ pub struct Window {
   pub reference: WindowRef,
   pub title: Option<String>,
   pub app_name: Option<String>,
-  pub app_bundle_id: Option<String>,
+  /// Platform application id: a bundle id on macOS, a desktop application id
+  /// on Linux (AT-SPI AccessibleId, or the GTK id / WM_CLASS class on X11).
+  /// Windows does not report one yet.
+  pub application_id: Option<String>,
   pub process_id: Option<u32>,
   pub frame: Rect,
   pub coordinate_space: CoordinateSpace,
@@ -34,6 +38,42 @@ pub fn find_window(windows: impl IntoIterator<Item = Window>, id: &str) -> Drive
   windows.into_iter().find(|window| window.reference.id == id).ok_or_else(|| DriverError::NotFound {
     target: format!("window:{id}"),
   })
+}
+
+/// A `NotFound` for an application selector that lists the applications
+/// owning visible windows, so a caller that guessed an id (`com.google.Chrome`
+/// on Linux or Windows) can retry without another `window.list` round trip.
+// NOTICE(app-not-found-hint): `DriverError::NotFound` has only a target, so the
+// hint rides in it. Move it to a structured recovery field if NotFound gains one.
+pub fn application_not_found(selector: &AppSelector, windows: &[Window]) -> DriverError {
+  let requested = [&selector.id, &selector.name]
+    .into_iter()
+    .flatten()
+    .map(|matcher| match matcher {
+      TextMatcher::Exact(text) | TextMatcher::Contains(text) => text.as_str(),
+    })
+    .collect::<Vec<_>>()
+    .join(" ");
+  let visible =
+    windows.iter().filter(|window| window.is_visible).filter_map(|window| window.application_id.as_deref().or(window.app_name.as_deref()));
+  DriverError::NotFound {
+    target: format!("application {requested:?} ({})", visible_applications_hint(visible)),
+  }
+}
+
+/// `visible applications: a, b, …` for application ids, sorted and deduplicated
+/// ignoring case, or `no visible application windows`. Long lists are cut so
+/// an error stays readable.
+pub fn visible_applications_hint<'a>(ids: impl IntoIterator<Item = &'a str>) -> String {
+  const MAX_LISTED: usize = 20;
+  let mut ids = ids.into_iter().filter(|id| !id.trim().is_empty()).collect::<Vec<_>>();
+  ids.sort_unstable_by_key(|id| id.to_lowercase());
+  ids.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+  match ids.len() {
+    0 => "no visible application windows".to_string(),
+    count if count > MAX_LISTED => format!("visible applications: {}, … ({} more)", ids[..MAX_LISTED].join(", "), count - MAX_LISTED),
+    _ => format!("visible applications: {}", ids.join(", ")),
+  }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

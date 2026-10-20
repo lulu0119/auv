@@ -44,13 +44,14 @@ members = [
   "crates/auv-driver-overlay-windows",
   "supported/apps/auv-steam",
   "crates/auv-view",
+  "crates/auv-bench-osu",
   "evals/auv-base",
 ]
 default-members = [ "crates/auv-cli" ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.34"
+version = "0.0.35"
 authors = [ "Moeru AI" ]
 edition = "2024"
 rust-version = "1.91"

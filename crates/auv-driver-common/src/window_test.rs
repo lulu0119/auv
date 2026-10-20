@@ -56,7 +56,7 @@ fn window(id: &str) -> Window {
     reference: WindowRef { id: id.to_string() },
     title: None,
     app_name: None,
-    app_bundle_id: None,
+    application_id: None,
     process_id: None,
     frame: Rect::new(0.0, 0.0, 10.0, 10.0),
     coordinate_space: CoordinateSpace::Screen,
@@ -77,4 +77,14 @@ fn find_window_reports_a_missing_window_as_not_found() {
   let error = find_window([window("1")], "2").expect_err("window 2 is not listed");
 
   assert!(matches!(error, DriverError::NotFound { ref target } if target == "window:2"), "{error:?}");
+}
+
+#[test]
+fn visible_applications_hint_sorts_dedups_and_caps_the_list() {
+  assert_eq!(visible_applications_hint([]), "no visible application windows");
+  assert_eq!(visible_applications_hint(["b.exe", "A.exe", "a.EXE", " "]), "visible applications: A.exe, b.exe");
+  let many = (0..25).map(|index| format!("app{index:02}")).collect::<Vec<_>>();
+  let hint = visible_applications_hint(many.iter().map(String::as_str));
+  assert!(hint.starts_with("visible applications: app00, app01,"), "{hint}");
+  assert!(hint.ends_with("app19, … (5 more)"), "{hint}");
 }

@@ -230,7 +230,10 @@ async fn selected_text_wait_preserves_timeout_semantics_after_one_exact_call() {
   .await
   .expect_err("empty response at the deadline times out");
 
-  assert_eq!(error, "window.waitForText did not find text \"Ready\" before timeout");
+  assert_eq!(
+    error,
+    "window.waitForText did not find text \"Ready\" within 0 ms; capture the window to check what is shown, or raise --timeout-ms"
+  );
   assert_eq!(calls.get(), 1);
 }
 
@@ -249,7 +252,7 @@ fn selected_window_selector_keeps_hierarchical_parent_context() {
     cancellation: Default::default(),
   });
 
-  assert_eq!(selector.app, Some(auv_driver::App::bundle("com.example.app")));
+  assert_eq!(selector.app, Some(auv_driver::App::id("com.example.app")));
   assert_eq!(selector.title, Some(auv_driver::TextMatcher::Contains("Preferences".to_string())));
 }
 
@@ -317,7 +320,7 @@ fn selected_window_text_click_projects_screen_match_and_reuses_click_options() {
     },
     title: None,
     app_name: None,
-    app_bundle_id: None,
+    application_id: None,
     process_id: None,
     frame: auv_driver::Rect::new(100.0, 200.0, 400.0, 300.0),
     coordinate_space: auv_driver::CoordinateSpace::Screen,

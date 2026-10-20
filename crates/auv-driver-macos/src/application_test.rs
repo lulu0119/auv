@@ -2,7 +2,10 @@ use super::*;
 
 #[test]
 fn activation_script_is_scoped_to_exact_bundle_id() {
-  assert_eq!(activation_script("com.apple.TextEdit").expect("script"), "tell application id \"com.apple.TextEdit\" to activate");
+  assert_eq!(
+    activation_script("com.apple.TextEdit").expect("script"),
+    "with timeout of 10 seconds\ntell application id \"com.apple.TextEdit\" to activate\nend timeout"
+  );
 }
 
 #[test]
@@ -16,13 +19,13 @@ fn activation_verification_distinguishes_verified_foreground_from_activation_onl
   assert_eq!(
     activation_verification("com.apple.TextEdit", Ok("com.apple.TextEdit".to_string())),
     ApplicationActivationVerification::VerifiedForeground {
-      observed_bundle_id: "com.apple.TextEdit".to_string(),
+      observed_application_id: "com.apple.TextEdit".to_string(),
     }
   );
   assert_eq!(
     activation_verification("com.apple.TextEdit", Ok("com.apple.finder".to_string())),
     ApplicationActivationVerification::ForegroundMismatch {
-      observed_bundle_id: "com.apple.finder".to_string(),
+      observed_application_id: "com.apple.finder".to_string(),
     }
   );
   assert_eq!(
@@ -34,6 +37,69 @@ fn activation_verification_distinguishes_verified_foreground_from_activation_onl
 }
 
 #[test]
+fn activation_verification_reports_unavailable_when_no_frontmost_bundle_id_was_observed() {
+  assert_eq!(
+    activation_verification("com.apple.TextEdit", Ok("  ".to_string())),
+    ApplicationActivationVerification::Unavailable {
+      reason: "WindowServer observation did not identify a frontmost application bundle id".to_string(),
+    }
+  );
+}
+
+#[test]
+fn activation_verification_matches_bundle_ids_case_insensitively() {
+  assert_eq!(
+    activation_verification("com.apple.textedit", Ok("com.apple.TextEdit".to_string())),
+    ApplicationActivationVerification::VerifiedForeground {
+      observed_application_id: "com.apple.TextEdit".to_string(),
+    }
+  );
+}
+
+#[test]
 fn activation_script_escapes_applescript_string_content() {
-  assert_eq!(activation_script("com.example.\\\"quoted").expect("script"), "tell application id \"com.example.\\\\\\\"quoted\" to activate");
+  assert!(
+    activation_script("com.example.\\\"quoted").expect("script").contains("tell application id \"com.example.\\\\\\\"quoted\" to activate")
+  );
+}
+
+// ROOT CAUSE:
+//
+// If app.activate had to launch an application through `open -b` (AppleScript
+// cannot launch some apps, such as Calculator: error -600), the single
+// frontmost check ran 150 ms later, before the application reached the
+// front, so a successful activation reported a foreground mismatch.
+//
+// The fix keeps re-observing until the requested application is frontmost or
+// the verification budget runs out.
+#[test]
+fn foreground_wait_returns_once_the_launched_application_is_frontmost() {
+  let mut observations = [
+    "com.apple.finder",
+    "com.apple.finder",
+    "com.apple.calculator",
+  ]
+  .into_iter();
+  let verification = wait_for_foreground("com.apple.calculator", Duration::from_secs(5), || {
+    Ok(observations.next().unwrap_or("com.apple.finder").to_string())
+  });
+  assert_eq!(
+    verification,
+    ApplicationActivationVerification::VerifiedForeground {
+      observed_application_id: "com.apple.calculator".to_string(),
+    }
+  );
+  assert_eq!(
+    wait_for_foreground("com.apple.calculator", Duration::ZERO, || Ok("com.apple.finder".to_string())),
+    ApplicationActivationVerification::ForegroundMismatch {
+      observed_application_id: "com.apple.finder".to_string(),
+    }
+  );
+  // An observation that cannot be made does not keep the caller waiting.
+  let started = std::time::Instant::now();
+  assert!(matches!(
+    wait_for_foreground("com.apple.calculator", Duration::from_secs(5), || Err("denied".to_string())),
+    ApplicationActivationVerification::Unavailable { .. }
+  ));
+  assert!(started.elapsed() < Duration::from_secs(1));
 }

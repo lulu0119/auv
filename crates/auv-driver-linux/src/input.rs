@@ -13,7 +13,10 @@ use auv_driver_common::input::{
   PasteTextOptions, Scroll, TextSubmit, TypeTextOptions,
 };
 
-use crate::clipboard::{restore as restore_clipboard, set_text as set_clipboard_text, snapshot as snapshot_clipboard};
+use crate::clipboard::{
+  restore as restore_clipboard, served_reads as served_clipboard_reads, set_text as set_clipboard_text, settle_own_selection,
+  snapshot as snapshot_clipboard, wait_for_paste_reader,
+};
 
 #[derive(Debug)]
 pub(crate) enum InputSession {
@@ -205,6 +208,16 @@ pub(crate) fn type_text(
   if matches!(options.policy, InputPolicy::BackgroundOnly) {
     return Err(invalid_input("linux type_text cannot use background_only input policy"));
   }
+  if !keysym_typeable(text) {
+    let paste = paste_options_for_text(text, options);
+    let plan = KeyboardPlan::paste_text(&paste, focused_terminal());
+    let layout = with_input_session(state, |session| {
+      let layout = session.keyboard_layout()?;
+      session.validate_keyboard(&layout, &plan)?;
+      Ok(layout)
+    })?;
+    return paste_prepared(state, paste, &layout, &plan).map(typed_through_paste);
+  }
   let plan = KeyboardPlan::type_text(text, options)?;
   with_input_session(state, |session| {
     let layout = session.keyboard_layout()?;
@@ -242,13 +255,21 @@ pub(crate) fn paste(state: &Arc<Mutex<LinuxDriverSessionState>>) -> DriverResult
 }
 
 pub(crate) fn paste_text(state: &Arc<Mutex<LinuxDriverSessionState>>, options: PasteTextOptions) -> DriverResult<InputActionResult> {
-  let plan = KeyboardPlan::paste_text(&options);
+  let plan = KeyboardPlan::paste_text(&options, focused_terminal());
   let layout = with_input_session(state, |session| {
     let layout = session.keyboard_layout()?;
     session.validate_keyboard(&layout, &plan)?;
     Ok(layout)
   })?;
   paste_prepared(state, options, &layout, &plan)
+}
+
+/// Whether the focused window belongs to a terminal emulator. An unknown
+/// focus keeps the ordinary Ctrl+V.
+pub(crate) fn focused_terminal() -> bool {
+  crate::atspi::active_window().ok().flatten().is_some_and(|window| {
+    [window.application_id.as_deref(), window.app_name.as_deref()].into_iter().flatten().any(auv_driver_common::is_terminal_emulator)
+  })
 }
 
 pub(crate) fn paste_prepared(
@@ -259,8 +280,15 @@ pub(crate) fn paste_prepared(
 ) -> DriverResult<InputActionResult> {
   let snapshot = snapshot_clipboard(state)?;
   let result = (|| {
+    let reads_before_set = served_clipboard_reads(state)?;
     set_clipboard_text(state, &options.text)?;
+    let reads_before = settle_own_selection(state, reads_before_set)?;
     with_input_session(state, |session| session.deliver_keyboard(layout, plan))?;
+    // Keep serving the pasted text until the focused application has read it;
+    // restoring earlier makes the portal drop the pending read.
+    if !wait_for_paste_reader(state, reads_before)? {
+      return Err(crate::error::backend("pasted text was not read: no application read the clipboard after the paste shortcut"));
+    }
     sleep_if_nonzero(options.settle);
     Ok(())
   })();
@@ -337,6 +365,45 @@ fn deliver_input<T>(
       state.input_session = None;
     }
   }
+  result
+}
+
+/// Whether keysym typing can deliver `text`. The portal and uinput backends
+/// type ASCII through the keyboard layout; other characters have no key.
+///
+/// NOTICE: one non-ASCII character sends the whole string through the
+/// clipboard, so `\n`/`\t` in it become pasted characters instead of Return
+/// and Tab presses. Splitting text into typed and pasted runs is a possible
+/// follow-up if a workflow needs both.
+pub(crate) fn keysym_typeable(text: &str) -> bool {
+  text.chars().all(|character| character.is_ascii())
+}
+
+/// The paste that delivers `text` when keysym typing cannot.
+///
+/// NOTICE: Linux keysym typing covers ASCII only, so non-ASCII text (CJK,
+/// accents, emoji) failed with "only supports ASCII text". Pasting is the only
+/// delivery for it on Wayland; the clipboard is restored afterwards, as for
+/// `input.pasteText`. This happens without `allow_clipboard_fallback` because
+/// there is no keyboard path to fall back from. `inter_char_delay` does not
+/// apply to pasted text, and the paste uses the portal clipboard even when the
+/// keyboard backend is uinput.
+pub(crate) fn paste_options_for_text(text: &str, options: TypeTextOptions) -> PasteTextOptions {
+  PasteTextOptions {
+    text: text.to_string(),
+    replace_existing: options.replace_existing,
+    submit: options.submit,
+    settle: options.settle,
+  }
+}
+
+/// Records that typed text went through the clipboard because keysym typing
+/// could not deliver it.
+pub(crate) fn typed_through_paste(mut result: InputActionResult) -> InputActionResult {
+  result.attempts.insert(
+    0,
+    InputAttempt::failure(InputDeliveryPath::ForegroundSystemEvents, "keysym typing supports ASCII only; pasted the text instead"),
+  );
   result
 }
 
@@ -422,12 +489,19 @@ impl KeyboardPlan {
     Ok(Self { steps })
   }
 
-  pub(crate) fn paste_text(options: &PasteTextOptions) -> Self {
+  /// `terminal` selects Ctrl+Shift+V, the paste shortcut of terminal
+  /// emulators; see `auv_driver_common::is_terminal_emulator`.
+  pub(crate) fn paste_text(options: &PasteTextOptions, terminal: bool) -> Self {
     let mut steps = Vec::new();
     if options.replace_existing {
       steps.extend(Self::chord(vec![keysym::CONTROL_L, 'a' as i32]).steps);
     }
-    steps.extend(Self::chord(vec![keysym::CONTROL_L, 'v' as i32]).steps);
+    let paste = if terminal {
+      vec![keysym::CONTROL_L, keysym::SHIFT_L, 'v' as i32]
+    } else {
+      vec![keysym::CONTROL_L, 'v' as i32]
+    };
+    steps.extend(Self::chord(paste).steps);
     if options.submit != TextSubmit::No {
       steps.extend(Self::chord(vec![keysym::RETURN]).steps);
     }
@@ -487,6 +561,13 @@ pub(crate) mod keysym {
       return Err(invalid_input("key must not be empty"));
     };
     if chars.next().is_some() {
+      // A spelled-out character name (`comma`, `bracket_left`) resolves through
+      // the shared key names to the character it names.
+      if let Ok(auv_driver_common::Key::Symbol(symbol)) = raw.parse::<auv_driver_common::Key>()
+        && let Some(named) = symbol.key_char().filter(char::is_ascii_graphic)
+      {
+        return for_char(named);
+      }
       return Err(invalid_input(format!("invalid key {raw}; use a special key, shortcut, or type_text for multi-character text")));
     }
     for_char(ch)
@@ -509,7 +590,8 @@ pub(crate) mod keysym {
       return Some(modifier);
     }
     // Keep this backend's existing named-key set and F1..F12 support.
-    if matches!(raw.to_ascii_lowercase().as_str(), "forwarddelete" | "forward_delete") {
+    // Compare without separators, as the shared parser does (`forward-delete`).
+    if raw.chars().filter(char::is_ascii_alphanumeric).collect::<String>().eq_ignore_ascii_case("forwarddelete") {
       return None;
     }
     match raw.parse::<Key>().ok()? {

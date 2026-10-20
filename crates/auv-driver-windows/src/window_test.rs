@@ -9,7 +9,7 @@ fn window(id: &str, title: Option<&str>, app: Option<&str>, pid: u32, frame: Rec
     reference: WindowRef { id: id.to_string() },
     title: title.map(str::to_string),
     app_name: app.map(str::to_string),
-    app_bundle_id: None,
+    application_id: None,
     process_id: (pid != 0).then_some(pid),
     frame,
     coordinate_space: CoordinateSpace::Screen,
@@ -132,7 +132,7 @@ fn invisible_windows_are_never_matched() {
 }
 
 #[test]
-fn bundle_selector_never_matches_on_windows() {
+fn application_id_that_is_not_the_executable_is_rejected() {
   let windows = vec![window(
     "1",
     Some("Doc"),
@@ -142,9 +142,41 @@ fn bundle_selector_never_matches_on_windows() {
   )];
 
   let selector = WindowSelector::default().owned_by(AppSelector {
-    bundle: Some(TextMatcher::Exact("com.example.app".to_string())),
+    id: Some(TextMatcher::Exact("com.example.app".to_string())),
     ..AppSelector::default()
   });
 
   assert!(resolve_from_windows(&windows, &selector).is_err());
+}
+
+// ROOT CAUSE:
+//
+// If a caller targeted an application with `--target app:<id>`, the CLI built
+// a bundle-id selector, and Windows windows carry no bundle id, so every such
+// command failed with a bare "main visible window was not found", even for a
+// running `Notepad.exe`.
+//
+// The fix matches the id against the executable name as well (ignoring case
+// and `.exe`), and a miss lists the visible applications.
+#[test]
+fn application_id_matches_the_executable_and_a_miss_lists_visible_applications() {
+  let windows = vec![
+    window("1", Some("notes.txt - Notepad"), Some("Notepad.exe"), 10, Rect::new(0.0, 0.0, 800.0, 600.0)),
+    window("2", Some("Edge"), Some("msedge.exe"), 11, Rect::new(0.0, 0.0, 800.0, 600.0)),
+  ];
+  // The CLI's local path selects by name, a Runner client by application id.
+  for id in ["notepad", "notepad.exe", "Notepad.exe"] {
+    for app in [App::id(id), App::name(id)] {
+      let selector = WindowQuery::main_visible().owned_by(app);
+      assert_eq!(resolve_from_windows(&windows, &selector).unwrap().reference.id, "1", "{id}");
+    }
+  }
+  let error = resolve_from_windows(&windows, &WindowQuery::main_visible().owned_by(App::id("com.google.Chrome"))).unwrap_err();
+  assert_eq!(
+    error.to_string(),
+    auv_driver_common::error::DriverError::NotFound {
+      target: "application \"com.google.Chrome\" (visible applications: msedge.exe, Notepad.exe)".into()
+    }
+    .to_string()
+  );
 }

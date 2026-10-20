@@ -80,6 +80,7 @@ fn window_from_accessible_projects_linux_app_id() {
     role: "window".to_string(),
     child_count: 0,
     focused: true,
+    active: true,
     bounds: Rect::new(1.0, 2.0, 300.0, 400.0),
   };
 
@@ -87,7 +88,7 @@ fn window_from_accessible_projects_linux_app_id() {
 
   assert_eq!(window.title.as_deref(), Some("Settings"));
   assert_eq!(window.app_name.as_deref(), Some("gnome-control-center"));
-  assert_eq!(window.app_bundle_id.as_deref(), Some("org.gnome.Settings"));
+  assert_eq!(window.application_id.as_deref(), Some("org.gnome.Settings"));
   assert!(window.reference.id.starts_with(WINDOW_REF_PREFIX));
 }
 
@@ -128,4 +129,21 @@ fn matching_stage_origin_deduplicates_nested_same_origin_rects() {
   );
 
   assert_eq!(origin, Some(Point::new(1752.0, 55.0)));
+}
+
+// ROOT CAUSE:
+//
+// If a caller asked whether an AT-SPI node was active or focused, the state
+// check looked for the state number inside `GetState`'s reply, but that reply
+// is a bitfield of two u32 words. ACTIVE (1) or FOCUSED (12) matched only by
+// accident, so the focused terminal was not recognized for Ctrl+Shift+V.
+//
+// The fix tests bit `n % 32` of word `n / 32`.
+#[test]
+fn state_set_is_a_bitfield_of_two_words() {
+  let active_and_focused = [(1 << 1) | (1 << 12), 0];
+  assert!(state_set_contains(&active_and_focused, STATE_ACTIVE));
+  assert!(state_set_contains(&active_and_focused, STATE_FOCUSED));
+  assert!(!state_set_contains(&[1, 0], STATE_ACTIVE));
+  assert!(state_set_contains(&[0, 1 << 2], 34));
 }

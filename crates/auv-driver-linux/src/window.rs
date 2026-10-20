@@ -80,13 +80,31 @@ fn resolve_from_windows(windows: &[Window], selector: &WindowSelector) -> Driver
         (window.frame.size.width * window.frame.size.height).round() as i64,
       ))
     });
-    return matches.first().map(|window| (*window).clone()).ok_or_else(|| not_found("main visible window"));
+    return matches.first().map(|window| (*window).clone()).ok_or_else(|| missing_window(windows, selector, "main visible window"));
   }
 
   match matches.as_slice() {
     [window] => Ok((*window).clone()),
-    [] => Err(not_found("window selector")),
+    [] => Err(missing_window(windows, selector, "window selector")),
     _ => Err(invalid_input(format!("window selector was ambiguous: {} windows matched", matches.len()))),
+  }
+}
+
+/// Names the visible applications when an application selector matched no
+/// window, so the caller sees which ids it could use.
+fn missing_window(windows: &[Window], selector: &WindowSelector, target: &str) -> auv_driver_common::error::DriverError {
+  match &selector.app {
+    Some(app) if !app.frontmost && (app.id.is_some() || app.name.is_some()) => {
+      let owned = windows.iter().any(|window| window.is_visible && matches_app_selector(window, app));
+      if owned {
+        not_found(target)
+      } else {
+        // The desktop shell's own surfaces are never resolved for an app target.
+        let applications = windows.iter().filter(|window| !is_desktop_shell_surface(window)).cloned().collect::<Vec<_>>();
+        auv_driver_common::window::application_not_found(app, &applications)
+      }
+    }
+    _ => not_found(target),
   }
 }
 
@@ -121,11 +139,11 @@ fn matches_app_selector(window: &Window, selector: &AppSelector) -> bool {
   {
     return false;
   }
-  if let Some(bundle) = &selector.bundle {
-    let Some(app_bundle_id) = &window.app_bundle_id else {
+  if let Some(matcher) = &selector.id {
+    let Some(application_id) = &window.application_id else {
       return false;
     };
-    if !matches_text(app_bundle_id, bundle) {
+    if !matches_text(application_id, matcher) {
       return false;
     }
   }
@@ -142,7 +160,7 @@ fn matches_app_selector(window: &Window, selector: &AppSelector) -> bool {
 
 fn is_desktop_shell_surface(window: &Window) -> bool {
   matches!(window.app_name.as_deref(), Some("gnome-shell" | "plasmashell"))
-    || matches!(window.app_bundle_id.as_deref(), Some("org.gnome.Shell" | "org.kde.plasmashell"))
+    || matches!(window.application_id.as_deref(), Some("org.gnome.Shell" | "org.kde.plasmashell"))
 }
 
 fn matches_text(value: &str, matcher: &TextMatcher) -> bool {
