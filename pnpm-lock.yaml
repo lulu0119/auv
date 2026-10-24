@@ -75,12 +75,9 @@ catalogs:
     '@eslint-react/eslint-plugin':
       specifier: ^3.0.0
       version: 3.0.0
-    '@exterior/client':
-      specifier: https://pkg.pr.new/lulu0119/exterior/@exterior/client@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4
-      version: 0.0.0-preview-d9b6c35
-    '@exterior/contract':
-      specifier: https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4
-      version: 0.0.0-preview-d9b6c35
+    '@exterioragentprotocol/sdk':
+      specifier: https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced
+      version: 0.0.0-preview-2205c5c
     '@grpc/grpc-js':
       specifier: 1.14.4
       version: 1.14.4
@@ -445,12 +442,9 @@ importers:
       '@codemirror/view':
         specifier: 'catalog:'
         version: 6.43.13
-      '@exterior/client':
+      '@exterioragentprotocol/sdk':
         specifier: 'catalog:'
-        version: https://pkg.pr.new/lulu0119/exterior/@exterior/client@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4(react@19.3.0)(typescript@6.0.3)
-      '@exterior/contract':
-        specifier: 'catalog:'
-        version: https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4(typescript@6.0.3)
+        version: https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced(react@19.3.0)(typescript@6.0.3)
       '@hafbit/react-acp':
         specifier: 'catalog:'
         version: 0.1.9(@assistant-ui/react@0.15.26(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(use-sync-external-store@1.7.0(react@19.3.0)))(@assistant-ui/store@0.3.18(@assistant-ui/tap@0.9.22(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(react@19.3.0))(@assistant-ui/tap@0.9.22(@types/react@19.3.0)(react@19.3.0))(@types/react@19.3.0)(assistant-cloud@0.2.6)(react@19.3.0)
@@ -1601,15 +1595,14 @@ packages:
       '@noble/hashes':
         optional: true
 
-  '@exterior/client@https://pkg.pr.new/lulu0119/exterior/@exterior/client@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4':
-    resolution: {integrity: sha512-m8kRd3Op2MSZ4Hx6FpgMvQzLmgl7nCTuVh1fn3NfAVINKckvIcIWfOO55nQwT65ZORuuRNn8RBvN4ICv23ttcw==, tarball: https://pkg.pr.new/lulu0119/exterior/@exterior/client@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4}
-    version: 0.0.0-preview-d9b6c35
+  '@exterioragentprotocol/sdk@https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced':
+    resolution: {integrity: sha512-9ALKNnZ+1K8We0LNiEDB80i+5kzRfV4eVbPdMNuev/qxojpVTDzGGwShoaTXgsN6U4v/XwW8J0pQcczWpGVKpA==, tarball: https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced}
+    version: 0.0.0-preview-2205c5c
     peerDependencies:
       react: ^19
-
-  '@exterior/contract@https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4':
-    resolution: {integrity: sha512-gtqAMc3BfsyjQqHtzCEPDZyJ1fJB/RlgIhL5SSl5azseMdBwrszLMKZkGDBKlSRYST5HoftVO028RCCha0Gexw==, tarball: https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4}
-    version: 0.0.0-preview-d9b6c35
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@floating-ui/core@1.8.0':
     resolution: {integrity: sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ==}
@@ -8214,19 +8207,17 @@ snapshots:
   '@exodus/bytes@1.15.1':
     optional: true
 
-  '@exterior/client@https://pkg.pr.new/lulu0119/exterior/@exterior/client@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4(react@19.3.0)(typescript@6.0.3)':
+  '@exterioragentprotocol/sdk@https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced(react@19.3.0)(typescript@6.0.3)':
     dependencies:
-      '@exterior/contract': https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4(typescript@6.0.3)
       oauth4webapi: 3.8.8
+      valibot: 1.5.0(typescript@6.0.3)
+      ws: 8.21.0
+    optionalDependencies:
       react: 19.3.0
     transitivePeerDependencies:
+      - bufferutil
       - typescript
-
-  '@exterior/contract@https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4(typescript@6.0.3)':
-    dependencies:
-      valibot: 1.5.0(typescript@6.0.3)
-    transitivePeerDependencies:
-      - typescript
+      - utf-8-validate
 
   '@floating-ui/core@1.8.0':
     dependencies:

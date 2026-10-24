@@ -2,9 +2,13 @@
 
 AUV tracing, run storage, artifact delivery, and inspect viewer contracts
 
-Count: **18**
+Count: **19**
 
 ## Current
+
+- [`2026-10-23-exterior-eap-sdk-migration.md`](2026-10-23-exterior-eap-sdk-migration.md)
+  (EAP v1 SDK, app setup registration, development and release identities,
+  account methods, and live verification limits)
 
 - [`2026-10-20-exterior-adapter-research.md`](2026-10-20-exterior-adapter-research.md)
   (Exterior package contract, device discovery, OAuth callback, tickets,

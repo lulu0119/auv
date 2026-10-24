@@ -248,6 +248,8 @@ An agent-side proxy exposes one HTTP MCP tool and forwards execution requests
 over the existing ACP connection. The browser requires no public listener.
 
 On the agent device, install this checkout's dependencies.
+The device also needs an Exterior client connected to the same relay.
+Use the [desktop app or CLI daemon](https://github.com/lulu0119/exterior/blob/2205c5c9267a8e0ece3e8cee31cbc073bccabced/docs/manual.md).
 Configure an Exterior custom agent slot with an absolute proxy path:
 
 ```sh
@@ -263,8 +265,53 @@ exterior login --relay <relay-origin>
 exterior daemon --relay <relay-origin>
 ```
 
+Keep the client running while you use the agent.
+For the pinned CLI preview, use this prefix for each command above:
+
+```sh
+npx --yes --package=https://pkg.pr.new/lulu0119/exterior@2205c5c9267a8e0ece3e8cee31cbc073bccabced -- exterior
+```
+
 Set `VITE_EXTERIOR_URL` to that relay origin before the Playground starts or
 builds. Its default is `http://127.0.0.1:8787`.
+
+The adapter uses `@exterioragentprotocol/sdk` for EAP v1.
+Exterior no longer supports anonymous app registration.
+The default client identity is
+`https://auv.moeru.ai/playground/oauth-client.json`.
+The build copies `public/oauth-client.json` to that address.
+The relay must receive JSON from this HTTPS address before sign-in can work.
+The local page can stay on `http://127.0.0.1:5180/playground/`.
+The document lists callbacks for both `127.0.0.1` and `localhost`.
+
+Before publication, follow Exterior's
+[app setup](https://github.com/lulu0119/exterior/blob/2205c5c9267a8e0ece3e8cee31cbc073bccabced/docs/app-setup.md).
+You can also use **Register app** on the relay dashboard.
+The setup link contains the app name and its exact callback.
+After you sign in and confirm registration, your assistant reads the public client id.
+Registration does not grant access to devices. App sign-in requests that access separately.
+
+For this development server, register this callback:
+
+```text
+http://127.0.0.1:5180/playground/oauth/callback
+```
+
+Put the returned client id in `apps/repl-playground/.env.development.local`:
+
+```dotenv
+VITE_EXTERIOR_URL=https://relay.apps.superpowerlulu.win
+VITE_EXTERIOR_CLIENT_ID=<registered-development-client-id>
+```
+
+Restart the development server after you change this configuration.
+Open `http://127.0.0.1:5180/playground/` so the callback matches registration.
+The development client needs no secret.
+The registered identity belongs to your account and works only on that relay.
+The development configuration does not affect production builds.
+Before release, publish the metadata document and use its address as the client id.
+People authorize the app again under that identity.
+The local page and the published page then use the same identity.
 
 From this checkout, the equivalent command is:
 
@@ -280,6 +327,8 @@ start a chat.
 
 Exterior is a concrete connection adapter in `src/features/agent/exterior.ts`.
 It owns OAuth callback configuration, device discovery, and connection tickets.
+The adapter uses `session.listDevices()` and `session.openConnection()`.
+The SDK obtains live tokens and shares concurrent refreshes for these calls.
 It converts a ticket into `{ url, label, cwd }` for the ACP session.
 The `cwd` comes from the agent device's `workingDirectory`.
 The ACP client, proxy, execution worker, and API help remain Playground-owned.
@@ -415,9 +464,9 @@ These are known and intentionally deferred; each is marked in code.
   Device credentials are stored in `localStorage`. Run only your own scripts and
   keep the REPL on a local origin.
 - **Agent tab**: `exterior.ts` adapts sign-in, devices, and tickets from
-  `@exterior/client`. The packages use an immutable preview revision.
-  See `NOTICE(preview-exotic-subdeps)` in `pnpm-workspace.yaml` and the
-  [Exterior contract research](../../docs/ai/references/inspect/2026-10-20-exterior-adapter-research.md).
+  `@exterioragentprotocol/sdk`. The package uses an immutable preview revision.
+  See the [EAP SDK migration](../../docs/ai/references/inspect/2026-10-23-exterior-eap-sdk-migration.md)
+  for client identities, local development, and live verification limits.
   The thread uses `@hafbit/react-acp` hooks. Sessions are ephemeral.
   There is no directory picker or session list; the device supplies the directory.
   Old sessions linger in the host agent process until disconnect.

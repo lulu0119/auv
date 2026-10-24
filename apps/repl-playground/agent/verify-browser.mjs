@@ -51,22 +51,25 @@ async function verifyAgentConnection(browser, url) {
     // Supply an unexpired synthetic account through the upstream storage
     // contract. This test does not exercise OAuth or contact a live relay.
     await page.addInitScript(() => {
-      sessionStorage.setItem('exterior.clientId:http://127.0.0.1:8787', 'browser-check')
       sessionStorage.setItem('exterior.accessToken', 'synthetic-token')
       sessionStorage.setItem('exterior.expiresAt', String(Date.now() + 3600000))
     })
     const cwd = 'C:/Users/test/agent-workspace'
-    await page.route('http://127.0.0.1:8787/api/devices', route => route.fulfill({ json: { devices: [
+    await page.route('http://127.0.0.1:8787/eap/v1/devices', route => route.fulfill({ json: { devices: [
       { agents: [{ agentType: 'custom', name: 'auv' }], hostname: 'agent-device', id: 'device', platform: 'windows', workingDirectory: cwd },
     ] } }))
-    await page.route('http://127.0.0.1:8787/api/connections', (route) => {
+    await page.route('http://127.0.0.1:8787/eap/v1/connections', (route) => {
       if (route.request().method() === 'OPTIONS')
         return route.fulfill({ status: 204 })
       assert.deepEqual(route.request().postDataJSON(), { agentName: 'auv', deviceId: 'device' })
-      assert.equal(route.request().headers().authorization, 'Bearer synthetic-token')
+      assert.equal(route.request().headers().authorization, 'Bearer connection-token')
       return route.fulfill({ json: { agentName: 'auv', agentType: 'custom', url: `ws://127.0.0.1:${server.address().port}` } })
     })
     await page.goto(url)
+    await page.getByRole('button', { exact: true, name: 'Connect' }).waitFor({ state: 'visible' })
+    // A token can rotate after discovery. Each connection needs a live token,
+    // rather than the one the account held when the form mounted.
+    await page.evaluate(() => sessionStorage.setItem('exterior.accessToken', 'connection-token'))
     await page.getByRole('button', { exact: true, name: 'Connect' }).click()
     await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
     assert.ok(messages.some(message => message.method === 'session/new' && message.params.cwd === cwd), 'ACP must use the selected device directory')
@@ -99,7 +102,7 @@ async function verifyAgentConnection(browser, url) {
     assert.equal(await page.getByRole('textbox', { name: 'Message the agent' }).count(), 0)
     assert.equal(messages.filter(message => message.method === 'session/new').length, newSessions)
     assert.deepEqual(errors, [])
-    return { connectionPreserved: true, deviceDirectory: true, newSessionBriefing: true, unsupportedAgentBlocked: true }
+    return { connectionPreserved: true, deviceDirectory: true, liveAccessToken: true, newSessionBriefing: true, unsupportedAgentBlocked: true }
   }
   finally {
     await page.close()
@@ -137,11 +140,15 @@ async function verifyBrowser() {
     const agentPanel = await page.getByRole('tabpanel', { name: 'Agent' }).elementHandle()
     const editor = await page.locator('.cm-editor').elementHandle()
     await scriptTab.click()
+    await editor.waitForElementState('visible')
+    await agentPanel.waitForElementState('hidden')
     assert.equal(await scriptTab.getAttribute('aria-selected'), 'true')
     assert.equal(await agentTab.getAttribute('aria-selected'), 'false')
     assert.equal(await agentPanel.isVisible(), false)
     assert.equal(await editor.isVisible(), true)
     await agentTab.click()
+    await agentPanel.waitForElementState('visible')
+    await editor.waitForElementState('hidden')
     assert.equal(await agentTab.getAttribute('aria-selected'), 'true')
     assert.equal(await agentPanel.isVisible(), true)
     assert.equal(await editor.isVisible(), false)

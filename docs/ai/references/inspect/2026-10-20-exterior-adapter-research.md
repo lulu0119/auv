@@ -1,5 +1,10 @@
 # Exterior connection contract for AUV Playground
 
+NOTICE: This document records the old client package and protocol.
+The [EAP SDK migration](2026-10-23-exterior-eap-sdk-migration.md) supersedes its
+package, registration, endpoint, and account-token contracts.
+The source evidence below remains historical.
+
 Source inspection date: 2026-10-20.
 Evidence level: upstream source inspection and package retrieval.
 Live OAuth, daemon, and relay behavior is outside this source evidence.

@@ -27,13 +27,6 @@ minimumReleaseAgeExclude:
 
 shellEmulator: true
 
-# NOTICE(preview-exotic-subdeps): the Agent tab uses Exterior's pkg.pr.new
-# preview tarballs, whose client->contract edge is a URL. pnpm 11 blocks that
-# as an exotic subdependency by default. This flag reopens it for the whole
-# workspace. Remove it (and the preview pins below) once `@exterior/contract`
-# and `@exterior/client` publish to the npm registry.
-blockExoticSubdeps: false
-
 trustPolicy: no-downgrade
 
 trustPolicyExclude:
@@ -85,10 +78,8 @@ catalog:
   '@moeru/eslint-config': ^0.1.0-beta.20
   '@moeru/eventa': ^1.0.2
   '@moeru/std': 0.1.0-beta.20
-  # NOTICE(preview-exotic-subdeps): pinned to one Exterior preview publish; both
-  # URLs must move together. Drop for registry versions when published.
-  '@exterior/client': https://pkg.pr.new/lulu0119/exterior/@exterior/client@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4
-  '@exterior/contract': https://pkg.pr.new/lulu0119/exterior/@exterior/contract@d9b6c35e0ff5b05262b1c5cf71c20f8fde47e6c4
+  # NOTICE(exterior-preview): pin the SDK preview until its npm release.
+  '@exterioragentprotocol/sdk': https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced
   '@napi-rs/cli': ^3.8.6
   '@pnpm/find-workspace-dir': 1000.1.5
   '@types/node': ^26.0.1

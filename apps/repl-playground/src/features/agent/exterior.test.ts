@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import clientMetadata from '../../../public/oauth-client.json'
+
 import { listTargets, openAgentConnection, useAccount } from './exterior'
 
 const upstream = vi.hoisted(() => ({ listDevices: vi.fn(), openConnection: vi.fn(), useAccount: vi.fn() }))
-vi.mock('@exterior/client', () => ({ browserCallbackPath: '/oauth/callback', listDevices: upstream.listDevices, openConnection: upstream.openConnection }))
-vi.mock('@exterior/client/react', () => ({ useAccount: upstream.useAccount }))
+vi.mock('@exterioragentprotocol/sdk/client', () => ({ browserCallbackPath: '/oauth/callback' }))
+vi.mock('@exterioragentprotocol/sdk/client/react', () => ({ useAccount: upstream.useAccount }))
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -13,6 +15,43 @@ afterEach(() => {
 })
 
 describe('exterior connection adapter', () => {
+  // ROOT CAUSE:
+  //
+  // Without an explicit client id, the old SDK tried anonymous registration.
+  // Relays now omit that endpoint, so sign-in failed before authorization.
+  it('starts sign-in with the configured client identity without anonymous registration', async () => {
+    vi.stubGlobal('window', { location: { origin: 'https://playground.example' } })
+    vi.stubEnv('BASE_URL', '/playground/')
+    vi.stubEnv('VITE_EXTERIOR_URL', 'https://relay.example')
+    vi.stubEnv('VITE_EXTERIOR_CLIENT_ID', 'registered-development-client')
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString())
+      const metadata = url.pathname === '/.well-known/oauth-protected-resource'
+        ? { authorization_servers: ['https://relay.example/api/auth'], resource: 'https://relay.example' }
+        : {
+            authorization_endpoint: 'https://relay.example/api/auth/oauth2/authorize',
+            issuer: 'https://relay.example/api/auth',
+            token_endpoint: 'https://relay.example/api/auth/oauth2/token',
+          }
+      return new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    useAccount()
+    const [, config] = upstream.useAccount.mock.lastCall!
+    const { beginBrowserSignIn } = await vi.importActual<typeof import('@exterioragentprotocol/sdk/client')>('@exterioragentprotocol/sdk/client')
+    const values = new Map<string, string>()
+    const store = {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => { values.delete(key) },
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    }
+    const url = new URL(await beginBrowserSignIn({ ...config, relayUrl: 'https://relay.example', store }))
+    expect(url.searchParams.get('client_id')).toBe('registered-development-client')
+    expect(url.searchParams.get('redirect_uri')).toBe('https://playground.example/playground/oauth/callback')
+    expect(url.searchParams.get('scope')).toBe('eap:client offline_access')
+    expect(fetch.mock.calls.every(([input]) => !input.toString().includes('/register'))).toBe(true)
+  })
+
   it('preserves the device working directory when discovering and connecting an agent', async () => {
     const cwd = String.raw`C:\Users\owner\repo`
     vi.stubEnv('VITE_EXTERIOR_URL', 'https://relay.example/path')
@@ -20,12 +59,12 @@ describe('exterior connection adapter', () => {
       { agents: [], hostname: 'empty', id: 'empty', platform: 'linux', workingDirectory: '/home/empty' },
       { agents: [{ agentType: 'custom', name: 'auv' }], hostname: 'workstation', id: 'device', platform: 'windows', workingDirectory: cwd },
     ])
-    upstream.openConnection.mockResolvedValue({ agentName: 'auv', agentType: 'custom', url: 'wss://relay.example/ticket' })
-    const targets = await listTargets('account-token')
-    expect(upstream.listDevices).toHaveBeenCalledWith('https://relay.example', 'account-token')
+    upstream.openConnection.mockResolvedValue({ url: 'wss://relay.example/ticket' })
+    const targets = await listTargets(upstream.listDevices)
+    expect(upstream.listDevices).toHaveBeenCalledWith()
     expect(targets).toEqual([{ agentName: 'auv', cwd, deviceId: 'device', label: 'workstation / auv' }])
-    const connection = await openAgentConnection('account-token', targets[0]!)
-    expect(upstream.openConnection).toHaveBeenCalledWith('https://relay.example', 'account-token', { agentName: 'auv', deviceId: 'device' })
+    const connection = await openAgentConnection(upstream.openConnection, targets[0]!)
+    expect(upstream.openConnection).toHaveBeenCalledWith({ agentName: 'auv', deviceId: 'device' })
     expect(connection).toEqual({ cwd, label: 'workstation / auv', url: 'wss://relay.example/ticket' })
   })
 
@@ -37,20 +76,21 @@ describe('exterior connection adapter', () => {
     upstream.useAccount.mockReturnValue(account)
     expect(useAccount()).toBe(account)
     expect(upstream.useAccount).toHaveBeenCalledWith('https://relay.example', {
+      clientId: clientMetadata.client_id,
       redirectUri: 'https://playground.example/playground/oauth/callback',
       returnTo: '/playground/',
     })
   })
 
-  it('uses the upstream local relay default without a valid override', async () => {
+  it('uses the local relay default without a valid override', () => {
+    vi.stubGlobal('window', { location: { origin: 'https://playground.example' } })
     vi.stubEnv('VITE_EXTERIOR_URL', 'invalid origin')
-    upstream.listDevices.mockResolvedValue([])
-    expect(await listTargets('account-token')).toEqual([])
-    expect(upstream.listDevices).toHaveBeenCalledWith('http://127.0.0.1:8787', 'account-token')
+    useAccount()
+    expect(upstream.useAccount).toHaveBeenCalledWith('http://127.0.0.1:8787', expect.objectContaining({ clientId: clientMetadata.client_id }))
   })
 
   it('reports ticket failures without manufacturing a connection', async () => {
     upstream.openConnection.mockRejectedValue(new Error('Device is offline'))
-    await expect(openAgentConnection('account-token', { agentName: 'auv', cwd: '/home/owner', deviceId: 'device', label: 'owner / auv' })).rejects.toThrow('Device is offline')
+    await expect(openAgentConnection(upstream.openConnection, { agentName: 'auv', cwd: '/home/owner', deviceId: 'device', label: 'owner / auv' })).rejects.toThrow('Device is offline')
   })
 })

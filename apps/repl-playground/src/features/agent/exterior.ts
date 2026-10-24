@@ -1,10 +1,11 @@
-import type { AccountSession } from '@exterior/client/react'
+import type { AccountSession } from '@exterioragentprotocol/sdk/client/react'
 
 import type { AgentConnection } from './AgentSession'
 
-import { browserCallbackPath, listDevices, openConnection } from '@exterior/client'
-import { useAccount as useExteriorAccount } from '@exterior/client/react'
-import { defaultRelayUrl } from '@exterior/contract'
+import { browserCallbackPath } from '@exterioragentprotocol/sdk/client'
+import { useAccount as useExteriorAccount } from '@exterioragentprotocol/sdk/client/react'
+
+const defaultRelayUrl = 'http://127.0.0.1:8787'
 
 export type { AccountSession }
 
@@ -17,8 +18,8 @@ export interface AgentTarget {
 }
 
 /** Normalize Exterior devices into selectable agent targets. */
-export async function listTargets(accessToken: string): Promise<AgentTarget[]> {
-  const devices = await listDevices(relayUrl(), accessToken)
+export async function listTargets(listDevices: AccountSession['listDevices']): Promise<AgentTarget[]> {
+  const devices = await listDevices()
   return devices.flatMap(device => device.agents.map(agent => ({
     agentName: agent.name,
     cwd: device.workingDirectory,
@@ -28,8 +29,8 @@ export async function listTargets(accessToken: string): Promise<AgentTarget[]> {
 }
 
 /** Exchange an Exterior target for the transport contract consumed by ACP. */
-export async function openAgentConnection(accessToken: string, target: AgentTarget): Promise<AgentConnection> {
-  const ticket = await openConnection(relayUrl(), accessToken, { agentName: target.agentName, deviceId: target.deviceId })
+export async function openAgentConnection(openConnection: AccountSession['openConnection'], target: AgentTarget): Promise<AgentConnection> {
+  const ticket = await openConnection({ agentName: target.agentName, deviceId: target.deviceId })
   return { cwd: target.cwd, label: target.label, url: ticket.url }
 }
 
@@ -40,6 +41,9 @@ export function useAccount(): AccountSession {
   const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`
   const callback = `${base}${browserCallbackPath.replace(/^\//, '')}`
   return useExteriorAccount(relayUrl(), {
+    // NOTICE(exterior-client-identity): the relay must fetch this document over
+    // HTTPS. Until publication, use the relay's app setup flow for a client id.
+    clientId: import.meta.env.VITE_EXTERIOR_CLIENT_ID || 'https://auv.moeru.ai/playground/oauth-client.json',
     redirectUri: new URL(callback, window.location.origin).href,
     returnTo: base,
   })

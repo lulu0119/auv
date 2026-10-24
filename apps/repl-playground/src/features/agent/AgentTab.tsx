@@ -21,7 +21,8 @@ const maxAutoRetries = 2
  */
 export function AgentTab() {
   const session = useAccount()
-  const accessToken = accessTokenOf(session)
+  const signedIn = session.account.phase === 'signed-in'
+  const openConnection = session.openConnection
   const [target, setTarget] = useState<AgentTarget | null>(null)
   const [ticket, setTicket] = useState<AgentConnection | null>(null)
   const [ticketError, setTicketError] = useState('')
@@ -30,12 +31,12 @@ export function AgentTab() {
   const retryingRef = useRef(false)
 
   const openTicket = useCallback(async (next: AgentTarget) => {
-    if (!accessToken)
+    if (!signedIn)
       return
     setOpening(true)
     setTicketError('')
     try {
-      setTicket(await openAgentConnection(accessToken, next))
+      setTicket(await openAgentConnection(openConnection, next))
     }
     catch (cause) {
       setTicketError(cause instanceof Error ? cause.message : String(cause))
@@ -44,7 +45,7 @@ export function AgentTab() {
       setOpening(false)
       retryingRef.current = false
     }
-  }, [accessToken])
+  }, [openConnection, signedIn])
 
   // A ticket is single-use. React StrictMode mounts twice in dev, so the
   // ghost mount burns the first ticket and the live mount dies before ever
@@ -83,8 +84,9 @@ export function AgentTab() {
   }, [])
 
   if (!target) {
-    // A new token means a different sign-in: remount for fresh device state.
-    return <ConnectView key={accessToken ?? 'signed-out'} onConnected={connect} session={session} />
+    // A sign-in phase change remounts the form for fresh device state.
+    // Token refreshes keep the current selection.
+    return <ConnectView key={session.account.phase} onConnected={connect} session={session} />
   }
   return (
     <AgentSession
@@ -98,26 +100,23 @@ export function AgentTab() {
   )
 }
 
-function accessTokenOf(session: AccountSession): string | undefined {
-  return session.account.phase === 'signed-in' ? session.account.accessToken : undefined
-}
-
 function ConnectView({ onConnected, session }: {
   onConnected: (target: AgentTarget) => void
   session: AccountSession
 }) {
   const [targets, setTargets] = useState<AgentTarget[]>([])
   const [selection, setSelection] = useState(0)
-  const accessToken = accessTokenOf(session)
-  // Remounted on every access-token change (see the `key` in `AgentTab`), so
+  const signedIn = session.account.phase === 'signed-in'
+  const listDevices = session.listDevices
+  // Remounted on every sign-in phase change (see the `key` in `AgentTab`), so
   // the initial status matches the current sign-in without syncing in the effect.
-  const [status, setStatus] = useState(() => accessToken ? 'Checking the sign-in.' : '')
+  const [status, setStatus] = useState(() => signedIn ? 'Checking the sign-in.' : '')
 
   useEffect(() => {
-    if (!accessToken)
+    if (!signedIn)
       return
     let cancelled = false
-    void listTargets(accessToken)
+    void listTargets(listDevices)
       .then((listed) => {
         if (cancelled)
           return
@@ -131,7 +130,7 @@ function ConnectView({ onConnected, session }: {
     return () => {
       cancelled = true
     }
-  }, [accessToken])
+  }, [listDevices, signedIn])
 
   if (session.account.phase === 'checking')
     return <Empty>Checking the sign-in.</Empty>
@@ -151,7 +150,7 @@ function ConnectView({ onConnected, session }: {
 
   const connect = () => {
     const target = targets[selection]
-    if (!target || !accessToken)
+    if (!target || !signedIn)
       return
     onConnected(target)
   }
