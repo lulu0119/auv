@@ -155,6 +155,13 @@ export function buildHelpCatalog(onSource?: (path: string) => void): ApiCatalog 
   for (let index = 0; index < pending.length; index++) {
     const { name, type } = pending[index]
     refs.clear()
+    // Enum unions otherwise print member imports without their wire values.
+    const enumDeclaration = type.getSymbol()?.declarations?.find(ts.isEnumDeclaration)
+    if (enumDeclaration) {
+      const members = enumDeclaration.members.map(member => `  ${member.name.getText()} = ${checker.getConstantValue(member)},`)
+      types[name].definition = `enum ${name} {\n${members.join('\n')}\n}`
+      continue
+    }
     let definition: string
     if (type.isUnion()) {
       definition = type.types.map(part => render(part, `${name}Value`)).join(' | ')

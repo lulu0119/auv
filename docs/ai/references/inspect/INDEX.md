@@ -2,9 +2,13 @@
 
 AUV tracing, run storage, artifact delivery, and inspect viewer contracts
 
-Count: **19**
+Count: **20**
 
 ## Current
+
+- [`2026-10-25-playground-codemode-session-history.md`](2026-10-25-playground-codemode-session-history.md)
+  (continuous codemode history and desktop frames, source attribution,
+  honest mock keyboard results, and numeric enum help)
 
 - [`2026-10-23-exterior-eap-sdk-migration.md`](2026-10-23-exterior-eap-sdk-migration.md)
   (EAP v1 SDK, app setup registration, development and release identities,

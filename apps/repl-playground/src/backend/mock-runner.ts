@@ -23,6 +23,7 @@ import {
   SCROLL_UNTIL_DEFAULTS,
   ScrollUntilStopReason,
   serveMockDaemon,
+  splitKeyCombination,
   TextRecognitionService,
   WindowClickStrategy,
   WindowService,
@@ -262,6 +263,16 @@ export function mockRunner(desktop: MockDesktop): Transport {
         return { action: delivered(InputDeliveryPath.WINDOW_TARGETED_MOUSE), screenPoint: point, window: windowMessage(target), windowPoint: local }
       },
       inputKeyboard: async (request) => {
+        if (request.inputs.length === 0)
+          throw new AuvRpcError(INVALID_ARGUMENT, 'keyboard input requires at least one action')
+        // Match the Runner's validation boundary: reject unsupported actions
+        // before an earlier action in the sequence can change the scene.
+        for (const input of request.inputs) {
+          if (input.action.case === 'press')
+            requireMockKey(input.action.value.options?.keys ?? [])
+          else if (input.action.case !== 'typeText' && input.action.case !== 'pasteText')
+            throw new AuvRpcError(INVALID_ARGUMENT, 'keyboard input requires a press, typeText, or pasteText action')
+        }
         const recipient = request.target?.recipient
         if (recipient?.case === 'window')
           window(recipient.value.ref?.windowId)
@@ -284,8 +295,9 @@ export function mockRunner(desktop: MockDesktop): Transport {
         return { actions }
       },
       pressKey: async (request) => {
+        const key = requireMockKey(splitKeyCombination(request.key))
         await delay(LATENCY_MS.key)
-        desktop.pressKey(request.key)
+        desktop.pressKey(key)
         return { action: delivered(InputDeliveryPath.FOREGROUND_SYSTEM_EVENTS) }
       },
       async* scrollUntil(requests) {
@@ -386,6 +398,17 @@ async function delay(ms: number): Promise<void> {
 
 function delivered(path: InputDeliveryPath) {
   return { attempts: [{ path, succeeded: true }], selectedPath: path }
+}
+
+/** The scene models Todo submission, not a native keyboard or text editor. */
+function requireMockKey(keys: readonly string[]): string {
+  if (keys.length === 0)
+    throw new AuvRpcError(INVALID_ARGUMENT, 'keys must not be empty')
+  // TODO(mock-keyboard-editing): modifiers and editing keys need scene state.
+  // Return UNIMPLEMENTED until an owner-approved slice adds that behavior.
+  if (keys.length !== 1 || !/^(?:return|enter)$/i.test(keys[0]!))
+    throw new AuvRpcError(UNIMPLEMENTED, 'the mock desktop supports only Return or Enter; other keys and shortcuts are not implemented')
+  return keys[0]!
 }
 
 function displayMessage(display: DisplayInfo) {

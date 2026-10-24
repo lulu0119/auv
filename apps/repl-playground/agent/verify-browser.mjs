@@ -228,9 +228,27 @@ async function verifyBrowser() {
     assert.equal(await editor.evaluate(node => node.isConnected), true)
     if (process.env.AUV_AGENT_SCREENSHOT)
       await page.screenshot({ animations: 'disabled', path: process.env.AUV_AGENT_SCREENSHOT })
+    // ROOT CAUSE: each codemode call started a new timeline. Even a help or
+    // store query erased SDK calls and hid the previous desktop capture.
+    const history = await page.evaluate(async () => {
+      const state = window.playgroundState()
+      const { cursorSeq, latestFramesAt } = await import('/playground/src/timeline.ts')
+      return { calls: state.calls.map(call => call.id), frames: latestFramesAt(state, cursorSeq(state)).map(frame => frame.handle.$ref), seq: cursorSeq(state) }
+    })
     const saved = await client.callTool({ arguments: { code: 'text(load("counterId")); text(typeof counter); text(typeof editorValue);' }, name: 'codemode' })
     assert.equal(saved.isError, false)
     assert.equal(saved.content.filter(item => item.type === 'text' && item.text === 'undefined').length, 2)
+    const continued = await page.evaluate(async () => {
+      const state = window.playgroundState()
+      const { cursorSeq, latestFramesAt } = await import('/playground/src/timeline.ts')
+      return { calls: state.calls.map(call => call.id), frames: latestFramesAt(state, cursorSeq(state)).map(frame => frame.handle.$ref), seq: cursorSeq(state) }
+    })
+    assert.deepEqual(continued.calls, history.calls, 'A call without SDK work must retain earlier calls')
+    assert.deepEqual(continued.frames, history.frames, 'A call without captures must retain the latest desktop image')
+    assert.ok(continued.seq > history.seq, 'Timeline positions must continue across codemode calls')
+    await page.getByRole('tab', { exact: true, name: 'Variables' }).click()
+    assert.match(await page.getByRole('tabpanel', { exact: true, name: 'Variables' }).innerText(), /Declared names show up here/, 'A fresh VM must not display variables from earlier scripts or the editor')
+    await page.getByRole('tab', { name: /^Calls / }).click()
     const failed = await client.callTool({ arguments: { code: 'store("counterId", "bad"); text("before"); throw new Error("intentional");' }, name: 'codemode' })
     assert.equal(failed.isError, true)
     assert.ok(failed.content.some(item => item.type === 'text' && item.text === 'before'))
@@ -242,6 +260,14 @@ async function verifyBrowser() {
     ` }, name: 'codemode' })
     assert.equal(jpeg.isError, false, JSON.stringify(jpeg))
     assert.ok(jpeg.content.some(item => item.type === 'image' && item.mimeType === 'image/jpeg'))
+    const appended = await page.evaluate(() => window.playgroundState().calls.map(call => ({ id: call.id, script: call.script, seq: call.seq })))
+    assert.deepEqual(appended.slice(0, history.calls.length).map(call => call.id), history.calls)
+    assert.ok(appended[history.calls.length].seq > continued.seq, 'Later SDK calls must append after earlier events')
+    assert.notEqual(appended.at(-1).script.id, appended[history.calls.length - 1].script.id)
+    assert.match(appended[history.calls.length - 1].script.source, /for \(let i = 0; i < 3;/, 'Earlier calls must retain their original source')
+    await page.locator(`[data-call-id="${history.calls.at(-1)}"] td`).first().click()
+    await page.locator('summary').filter({ hasText: 'source' }).click()
+    assert.match(await page.locator('details pre').innerText(), /for \(let i = 0; i < 3;/, 'The inspector must show the selected call source')
     const canceled = client.callTool({ arguments: { code: 'text("waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('waiting')))
     await page.evaluate(() => window.codemodeHost.cancel())
@@ -256,7 +282,7 @@ async function verifyBrowser() {
     assert.equal(editorRun.value, 99)
     assert.equal(errors.length, 0, errors.join('\n'))
     const agentUi = await verifyAgentConnection(browser, vite.resolvedUrls.local[0])
-    console.info(JSON.stringify({ agentUi, calls, cancellation: true, discoveryAndHelpExample: true, editorStatePreserved: true, images: true, mountedTabsPreserved: true, stateRollback: true, timeoutAndRecovery: true, viewportFit: true }, null, 2))
+    console.info(JSON.stringify({ agentUi, calls, cancellation: true, continuousHistoryAndDesktop: true, discoveryAndHelpExample: true, editorStatePreserved: true, images: true, mountedTabsPreserved: true, sourceHistory: true, stateRollback: true, timeoutAndRecovery: true, viewportFit: true }, null, 2))
   }
   finally {
     await client.close()

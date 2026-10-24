@@ -77,4 +77,36 @@ describe('mock Runner', () => {
     expect(discovered.apis.find(api => api.method === 'ClickPoint')?.presentation?.name).toBe('input.click')
     await connection.close()
   })
+
+  // ROOT CAUSE: the scene only handled Return, but the Runner reported every
+  // key and even an empty keyboard sequence as successfully delivered.
+  it('rejects unsupported keys and empty keyboard sequences', async () => {
+    const { connection, runner } = await mock()
+    try {
+      const counter = await runner.windows.get('w-counter')
+      await expect(counter.pressKeys('not-a-real-key-xyz')).rejects.toMatchObject({ rpcCode: 12 })
+      await expect(counter.pressKeys(['cmd', 'a'])).rejects.toMatchObject({ rpcCode: 12 })
+      await expect(runner.input.pressKey('escape')).rejects.toMatchObject({ rpcCode: 12 })
+      await expect(runner.input.keyboard({ inputs: [] })).rejects.toMatchObject({ rpcCode: 3 })
+    }
+    finally {
+      await connection.close()
+    }
+  })
+
+  it('checks every keyboard action before delivering any of them', async () => {
+    const { connection, desktop, runner } = await mock()
+    try {
+      const todos = await runner.windows.get('w-todos')
+      await todos.click({ x: 100, y: 74 })
+      await expect(runner.input.keyboard({ inputs: [
+        { action: { case: 'typeText', value: { text: 'Must not be typed' } } },
+        { action: { case: 'press', value: { options: { keys: ['escape'] } } } },
+      ] })).rejects.toMatchObject({ rpcCode: 12 })
+      expect(desktop.accessibilityTree().children[0]!.children[0]!.value).toBe('')
+    }
+    finally {
+      await connection.close()
+    }
+  })
 })

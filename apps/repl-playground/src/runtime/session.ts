@@ -4,7 +4,7 @@ import type { Recording } from '../backend/replay'
 import type { Backend, RunBackend } from '../backend/types'
 import type { Rect } from '../script-api/api'
 import type { BindSite, StepSite } from '../stepper/compile'
-import type { BindEvent, Mark, StepEvent } from '../store'
+import type { BindEvent, Mark, ScriptSource, StepEvent } from '../store'
 import type { CodeModeState, ExecWorkerApi, HostApi, LanguageWorkerApi, ResumeMode, RunOutcome } from './protocol'
 
 import { camelCaseName } from '@auv-js/sdk'
@@ -173,12 +173,13 @@ class ExecSession {
       timer = setTimeout(cancel, options.codemode.timeoutMs)
     const recorder = !options.replay && live ? new RecordingBackend(live) : undefined
     this.#runBackend = options.replay ? new ReplayBackend(this.#recording!) : recorder ?? live
-    this.#seq = 0
     this.#lineHits = new Map()
     this.#lastLine = null
-    actions.beginRun(options.replay ? 'replay' : 'live')
+    const script: ScriptSource = { id: ++this.#cellId, kind: options.codemode ? 'codemode' : 'editor', source: options.source, startLine: options.startLine }
+    actions.beginRun(options.replay ? 'replay' : 'live', script, options.codemode !== undefined)
+    this.#seq = usePlayground.getState().seqAt.length
     try {
-      const compiled = await language.compile({ allowReturn: options.codemode !== undefined, cellId: ++this.#cellId, source: options.source, startLine: options.startLine })
+      const compiled = await language.compile({ allowReturn: options.codemode !== undefined, cellId: script.id, source: options.source, startLine: options.startLine })
       if (!compiled.ok) {
         actions.patchRun({ endedAt: Date.now(), errorLine: compiled.line, errorMessage: compiled.message, status: 'error' })
         return { line: compiled.line, message: compiled.message, status: 'error' }
@@ -249,6 +250,7 @@ class ExecSession {
     }
     finally {
       abort.abort()
+      this.#batch.flush()
       clearTimeout(timer)
       options.signal?.removeEventListener('abort', cancel)
       if (options.codemode) {
@@ -323,7 +325,7 @@ class ExecSession {
     worker.postMessage({ type: SDK_PORT_MESSAGE }, [channel.port2])
     serveBridge(createWorkerChannel(channel.port1 as unknown as Worker).context, {
       record: async (start) => {
-        const runIndex = usePlayground.getState().runIndex
+        const script = usePlayground.getState().run.script!
         const backend = this.#runBackend
         const line = lineOf(start.stepId)
         const described = await backend?.sdk().describe(start.method)
@@ -346,13 +348,14 @@ class ExecSession {
           // `Service/Method` without the package for a method that has none.
           method: described?.presentation ? camelCaseName(described.presentation.name) : start.method.slice(start.method.lastIndexOf('.') + 1),
           rpc: { path: start.method, presentation: described?.presentation },
+          script,
           seq,
           startedAt: nowMs(),
         })
         // TODO(playground-sdk-stream-progress): a stream's resources appear
         // when it ends; show each scroll-until step as it arrives.
         return (end) => {
-          if (usePlayground.getState().runIndex !== runIndex)
+          if (this.#cellId !== script.id)
             return
           const responses = end.exchange.flatMap(frame => 'response' in frame ? [frame.response] : [])
           const results = end.json !== undefined ? [JSON.parse(end.json) as unknown] : responses.map(body => decode(body, 'response'))
@@ -390,7 +393,7 @@ class ExecSession {
         if (!site)
           return
         const hit = ++this.#bindHits[bindId]!
-        this.#batch.binds.push({ at, hit, line: site.line, seq: this.#nextSeq(at), values })
+        this.#batch.binds.push({ at, hit, line: site.line, scriptId: this.#cellId, seq: this.#nextSeq(at), values })
       },
       onCodeOutput: (content) => {
         this.#codeOutput.push(content)
@@ -435,7 +438,7 @@ class ExecSession {
         this.#lineHits.set(site.line, hit)
         this.#lastLine = site.line
         this.#batch.lines.add(site.line)
-        this.#batch.steps.push({ at, hit, line: site.line, seq: this.#nextSeq(at) })
+        this.#batch.steps.push({ at, hit, line: site.line, scriptId: this.#cellId, seq: this.#nextSeq(at) })
       },
       onVars: (vars) => {
         usePlayground.setState({ vars })

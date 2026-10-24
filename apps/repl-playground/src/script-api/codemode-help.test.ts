@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { compileCell } from '../stepper/compile'
 import { runCodeMode } from '../workers/codemode'
 import { createApiHelp } from './codemode-help'
+import { codeModeSdk } from './codemode-sdk'
 
 const api = createApiHelp(catalog)
 
@@ -41,6 +42,24 @@ describe('agent SDK help', () => {
     expect(api.search({ query: 'connect' }).items.map(item => item.path)).not.toContain('sdk.connect')
     expect(() => api.search({ limit: 11 })).toThrow('limit from 1 to 10')
     expect(() => api.search({ offset: -1 })).toThrow('nonnegative offset')
+  })
+
+  // ROOT CAUSE: enum member types were printed as imports with no numeric
+  // values, and the agent VM did not expose the scroll completion enum.
+  it('explains numeric scroll reasons and makes the enum usable in the VM', async () => {
+    expect(api.describe({ path: 'ScrollUntilStopReason' })).toMatchObject({
+      definition: expect.stringContaining('BUDGET_EXHAUSTED = 3'),
+      found: true,
+    })
+    const outcome = await runCodeMode({ ...compileCell('text(sdk.ScrollUntilStopReason[3]);', { allowReturn: true }), breakpoints: [], codemode: { store: {}, timeoutMs: 2000 }, executionId: 1, mode: 'run' }, {
+      __bind: () => {},
+      __step: async () => {},
+      __stepSync: () => {},
+      auv: {},
+      sdk: codeModeSdk,
+    }, new AbortController().signal)
+    expect(outcome.status).toBe('ok')
+    expect(outcome.codemode!.content).toEqual([{ text: 'BUDGET_EXHAUSTED', type: 'text' }])
   })
 
   it('keeps each help result within the VM output budget and resolves its type links', () => {

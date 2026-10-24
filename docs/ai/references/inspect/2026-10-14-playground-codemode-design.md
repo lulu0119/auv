@@ -22,6 +22,11 @@ Scripts receive `auv`, admitted `sdk` helpers, `api`, `text`, `image`, and `stor
 SDK resource methods remain callable on returned objects, including `WindowClient`.
 Only explicit text/image output and execution status return to the agent.
 SDK calls and intermediate results remain available in the shared timeline.
+Codemode calls append to that timeline with increasing event positions.
+Each call retains its source script for inspection.
+A call without a capture keeps the latest captured desktop image visible.
+An editor run starts a separate timeline. Reset clears the timeline and restores the mock desktop.
+See the [history and mock fixes](2026-10-25-playground-codemode-session-history.md) for causes and regression evidence.
 
 `store/load` holds bounded JSON data in the active ACP session.
 Successful calls commit writes. Failed or canceled calls preserve the committed store.

@@ -678,7 +678,7 @@ function captureRefOf(target: CaptureTarget): Init<typeof CaptureRefSchema> {
   if ('captureId' in target)
     return { captureId: target.captureId }
   if (!target.ref)
-    throw new TypeError('CapturedFrame has no capture reference; pass a frame returned by the Runner')
+    throw new TypeError('Expected a capture ID, CaptureRef, or CapturedFrame. For capture() responses, pass response.capture.')
   return { captureId: target.ref.captureId }
 }
 

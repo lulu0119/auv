@@ -17,4 +17,5 @@ export const codeModeSdk = {
   Position: sdk.Position,
   region: sdk.region,
   rightOf: sdk.rightOf,
+  ScrollUntilStopReason: sdk.ScrollUntilStopReason,
 }
