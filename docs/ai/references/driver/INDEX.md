@@ -7,7 +7,7 @@ Executable GUI evaluations live in
 test objects, tasks, and cases. Rust runs evaluations; shared desktop receivers
 use TypeScript. Raw run output stays local.
 
-Count: **79**
+Count: **80**
 
 - [`2026-05-20-macos-driver-namespace-after-window-screen-design.md`](2026-05-20-macos-driver-namespace-after-window-screen-design.md)
 - [`2026-05-20-macos-osascript-backend-design.md`](2026-05-20-macos-osascript-backend-design.md)
@@ -100,6 +100,7 @@ Count: **79**
 - [`2026-10-20-linux-window-list-latency.md`](2026-10-20-linux-window-list-latency.md): `window.list` stage-walk latency (17,289 a11y calls, 9 s) reduced to 683 calls by gating the GNOME Shell origin repair and walking both window containers; measurements, ablation, boundaries, and the remaining bounds-only-walk TODO.
 - [`2026-10-20-linux-live-desktop-matrix.md`](2026-10-20-linux-live-desktop-matrix.md): live Linux desktop evidence behind the matrix cells: window list/capture/findText, display capture fallback, PaperWM and occlusion boundaries.
 - [`2026-10-20-linux-window-text-ocr.md`](2026-10-20-linux-window-text-ocr.md): `window.findText` and `window.waitForText` wired on Linux through AT-SPI resolve, display crop, and Tesseract; visible-area and PaperWM boundaries, no support-matrix claim.
+- [`2026-10-20-windows-screen-clicktext.md`](2026-10-20-windows-screen-clicktext.md): Windows local screen OCR click, foreground boundary and owned-receiver evidence.
 
 
 ## Related
