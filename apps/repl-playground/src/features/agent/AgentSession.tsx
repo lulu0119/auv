@@ -9,6 +9,7 @@ import { Empty } from '../../components/Empty'
 import { sandboxBriefing } from './agent-context'
 import { AgentThread } from './AgentThread'
 import { CodeModeHost, codeModeStream } from './codemode-bridge'
+import { relayUrl, serveMcp } from './exterior'
 
 /** Provider-independent input for a fresh ACP connection. */
 export interface AgentConnection {
@@ -23,7 +24,8 @@ export interface AgentConnection {
  * The thread below always starts a new session: it never loads or resumes a
  * session the host agent already has.
  */
-export function AgentSession({ connection, onDisconnect, onInfantDeath, onRetry, opening, ticketError }: {
+export function AgentSession({ accessToken, connection, onDisconnect, onInfantDeath, onRetry, opening, ticketError }: {
+  accessToken: () => Promise<string>
   connection: AgentConnection | null
   onDisconnect: () => void
   /** A connection that died before ever reaching ready; the parent reopens with a fresh ticket. */
@@ -35,7 +37,7 @@ export function AgentSession({ connection, onDisconnect, onInfantDeath, onRetry,
 }) {
   let body: React.ReactNode
   if (connection) {
-    body = <LiveConnection connection={connection} key={connection.url} onInfantDeath={onInfantDeath} onRetry={onRetry} opening={opening} />
+    body = <LiveConnection accessToken={accessToken} connection={connection} key={connection.url} onInfantDeath={onInfantDeath} onRetry={onRetry} opening={opening} />
   }
   else if (ticketError) {
     body = (
@@ -89,7 +91,8 @@ function describeConnectionError(value: unknown): string {
   }
 }
 
-function LiveConnection({ connection, onInfantDeath, onRetry, opening }: {
+function LiveConnection({ accessToken, connection, onInfantDeath, onRetry, opening }: {
+  accessToken: () => Promise<string>
   connection: AgentConnection
   onInfantDeath: () => void
   onRetry: () => void
@@ -97,16 +100,26 @@ function LiveConnection({ connection, onInfantDeath, onRetry, opening }: {
 }) {
   const [codemode] = useState(() => new CodeModeHost())
   const [supportsCodemode, setSupportsCodemode] = useState(false)
-  const [adapter] = useState(() => new SdkAcpClientAdapter(({ signal }) => codeModeStream(
-    createWebSocketStream(connection.url),
-    codemode,
-    signal,
-    setSupportsCodemode,
-    sandboxBriefing,
-  )))
+  const [toolError, setToolError] = useState('')
+  const [adapter] = useState(() => new SdkAcpClientAdapter(async ({ signal }) => {
+    // Each attempt owns its endpoint. StrictMode's discarded attempt must
+    // not close the endpoint used by the live ACP connection.
+    const tools = await serveMcp(relayUrl(), await accessToken(), transport => void codemode.connect(transport), signal)
+    if (signal.aborted) {
+      tools.close()
+      signal.throwIfAborted()
+    }
+    void tools.closed.then((reason) => {
+      codemode.cancel()
+      if (!signal.aborted)
+        setToolError(reason === 'revoked' ? 'Access was revoked. Sign in again.' : 'The tool connection closed. Reconnect the agent.')
+    })
+    return codeModeStream(createWebSocketStream(connection.url), codemode, signal, tools, setSupportsCodemode, sandboxBriefing)
+  }))
   const runtime = useAcpRuntime({
     clientInfo: { name: 'auv-playground', version },
     connection: { adapter, type: 'adapter' },
+    onThreadIdChange: sessionId => codemode.setSession(sessionId),
     // TODO(agent-directory): an explicit directory picker is deferred until
     // an approved workspace-selection slice; use the device's directory.
     workspace: { cwd: connection.cwd },
@@ -114,17 +127,18 @@ function LiveConnection({ connection, onInfantDeath, onRetry, opening }: {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <SessionBody codemode={codemode} onInfantDeath={onInfantDeath} onRetry={onRetry} opening={opening} supportsCodemode={supportsCodemode} />
+      <SessionBody codemode={codemode} onInfantDeath={onInfantDeath} onRetry={onRetry} opening={opening} supportsCodemode={supportsCodemode} toolError={toolError} />
     </AssistantRuntimeProvider>
   )
 }
 
-function SessionBody({ codemode, onInfantDeath, onRetry, opening, supportsCodemode }: {
+function SessionBody({ codemode, onInfantDeath, onRetry, opening, supportsCodemode, toolError }: {
   codemode: CodeModeHost
   onInfantDeath: () => void
   onRetry: () => void
   opening: boolean
   supportsCodemode: boolean
+  toolError: string
 }) {
   const { error, status } = useAcpConnection()
   const thread = useAcpThreadState()
@@ -197,10 +211,10 @@ function SessionBody({ codemode, onInfantDeath, onRetry, opening, supportsCodemo
   if (status !== 'ready')
     return <Empty>{status === 'connecting' ? 'Opening the agent.' : status}</Empty>
   if (!supportsCodemode) {
-    return <Empty>This agent does not support MCP over ACP. Use an agent with ACP MCP support, or configure the HTTP MCP adapter on the agent device, then reconnect.</Empty>
+    return <Empty>This agent does not support HTTP MCP. Choose an agent with HTTP MCP support.</Empty>
   }
-  if (failure)
-    return <Empty><span className="text-bad">{failure}</span></Empty>
+  if (failure || toolError)
+    return <Empty><span className="text-bad">{failure || toolError}</span></Empty>
   if (thread.activeSessionId === undefined)
     return <Empty>Starting a new session.</Empty>
   return <AgentThread />

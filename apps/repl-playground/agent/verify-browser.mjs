@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
 import process from 'node:process'
 
-import { createInterface } from 'node:readline'
-import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -11,10 +9,10 @@ import { chromium } from 'playwright'
 import { createServer } from 'vite'
 import { WebSocketServer } from 'ws'
 
-import { startProxy } from './proxy.mjs'
+import { createMcpRelay } from './relay.fixture.mjs'
 
 /** Exercise the actual connection UI with synthetic Exterior responses and ACP frames. */
-async function verifyAgentConnection(browser, url) {
+async function verifyAgentConnection(browser, url, relay, imageResult) {
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } })
   page.setDefaultTimeout(15000)
   const errors = []
@@ -24,19 +22,33 @@ async function verifyAgentConnection(browser, url) {
   const messages = []
   let supported = true
   let connections = 0
+  const clients = []
   server.on('connection', (socket) => {
     connections++
-    socket.on('message', (data) => {
+    socket.on('message', async (data) => {
       const message = JSON.parse(data.toString())
       messages.push(message)
       let result
       if (message.method === 'initialize') {
-        result = { agentCapabilities: supported ? { mcpCapabilities: { acp: true } } : {}, protocolVersion: 1 }
+        result = { agentCapabilities: supported ? { mcpCapabilities: { http: true } } : {}, protocolVersion: 1 }
       }
       else if (message.method === 'session/new') {
+        const declaration = message.params.mcpServers.find(server => server.type === 'http')
+        assert.ok(declaration, 'An ordinary agent must receive the HTTP MCP declaration')
+        const client = new Client({ name: 'agent', version: '1' })
+        await client.connect(new StreamableHTTPClientTransport(new URL(declaration.url), { requestInit: { headers: Object.fromEntries(declaration.headers.map(header => [header.name, header.value])) } }))
+        assert.equal((await client.listTools()).tools[0].name, 'codemode', 'Tool discovery must work before ACP session creation finishes')
+        clients.push(client)
         result = { sessionId: `ui-${message.id}` }
       }
       else if (message.method === 'session/prompt') {
+        const notify = update => socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params.sessionId, update } }))
+        // ROOT CAUSE: the chat rendered only the wrapper's completed status,
+        // hiding its input and the failed nested tool result delivered by ACP.
+        // OpenCode 2.0.26 sends nested statuses in rawOutput.metadata.toolCalls.
+        notify({ kind: 'other', rawInput: { code: 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });' }, sessionUpdate: 'tool_call', status: 'in_progress', title: 'execute', toolCallId: 'nested-failure' })
+        notify({ content: [{ content: { text: 'Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', type: 'text' }, type: 'content' }], rawOutput: { metadata: { toolCalls: [{ status: 'error', tool: 'auv-playground.codemode' }] } }, sessionUpdate: 'tool_call_update', status: 'completed', toolCallId: 'nested-failure' })
+        notify({ content: [{ content: imageResult, type: 'content' }], kind: 'read', rawInput: { code: 'await image(capture);' }, sessionUpdate: 'tool_call', status: 'completed', title: 'Capture result', toolCallId: 'image-result' })
         socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {
           sessionId: message.params.sessionId,
           update: { content: { text: 'Connected through the test ACP peer.', type: 'text' }, sessionUpdate: 'agent_message_chunk' },
@@ -45,16 +57,6 @@ async function verifyAgentConnection(browser, url) {
       }
       if (result) {
         socket.send(JSON.stringify({ id: message.id, jsonrpc: '2.0', result }))
-        if (message.method === 'session/new') {
-          const declaration = message.params.mcpServers.find(server => server.type === 'acp')
-          assert.ok(declaration, 'A native agent must receive the ACP MCP declaration')
-          socket.send(JSON.stringify({ id: `catalog-${message.id}`, jsonrpc: '2.0', method: 'mcp/message', params: {
-            method: 'tools/list',
-            params: { _meta: { 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
-            requestId: `catalog-${message.id}`,
-            serverId: declaration.serverId,
-          } }))
-        }
       }
     })
   })
@@ -66,10 +68,10 @@ async function verifyAgentConnection(browser, url) {
       sessionStorage.setItem('exterior.expiresAt', String(Date.now() + 3600000))
     })
     const cwd = 'C:/Users/test/agent-workspace'
-    await page.route('http://127.0.0.1:8787/eap/v1/devices', route => route.fulfill({ json: { devices: [
+    await page.route(`${relay.url}/eap/v1/devices`, route => route.fulfill({ json: { devices: [
       { agents: [{ agentType: 'custom', name: 'auv' }], hostname: 'agent-device', id: 'device', platform: 'windows', workingDirectory: cwd },
     ] } }))
-    await page.route('http://127.0.0.1:8787/eap/v1/connections', (route) => {
+    await page.route(`${relay.url}/eap/v1/connections`, (route) => {
       if (route.request().method() === 'OPTIONS')
         return route.fulfill({ status: 204 })
       assert.deepEqual(route.request().postDataJSON(), { agentName: 'auv', deviceId: 'device' })
@@ -91,12 +93,29 @@ async function verifyAgentConnection(browser, url) {
     await page.getByRole('textbox', { name: 'Message the agent' }).fill('Check the connection')
     await page.getByRole('button', { exact: true, name: 'Send' }).click()
     await page.getByText('Connected through the test ACP peer.', { exact: true }).waitFor()
-    assert.ok(messages.some(message => message.result?.result?.tools?.[0]?.name === 'codemode'), 'A native ACP agent must discover the browser MCP tool')
+    const tool = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: 'execute' }) })
+    await tool.locator('summary').first().click()
+    await tool.getByText('Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', { exact: true }).waitFor()
+    assert.match(await tool.locator('summary').first().textContent(), /complete/, 'A completed wrapper must keep its own status when a nested tool fails')
+    assert.equal(JSON.parse(await tool.locator('pre').first().textContent()).code, 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });', 'The complete tool input must remain inspectable')
+    await tool.locator('summary').filter({ hasText: 'Raw output' }).click()
+    assert.match(await tool.textContent(), /"status": "error"/, 'The nested error metadata must remain inspectable')
+    const capture = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: 'Capture result' }) })
+    await capture.locator('summary').first().click()
+    const image = capture.getByRole('img', { name: 'Tool result' })
+    await image.scrollIntoViewIfNeeded()
+    await image.evaluate(element => element.decode())
+    assert.equal(await image.evaluate(element => element.complete && element.naturalWidth > 0), true, 'ACP tool images must render as images')
+    assert.ok(clients.length > 0, 'The agent must discover the browser tool through HTTP MCP')
+    assert.ok(relay.registrations.includes('Bearer connection-token'), 'The MCP endpoint must use a live account token')
     assert.equal(connections, opened, 'Tab switches must retain the ACP socket')
     assert.equal(messages.filter(message => message.method === 'session/new').length, sessions, 'Tab switches must retain the ACP session')
     assert.ok(messages.find(message => message.method === 'session/prompt').params.prompt.some(part => part.text?.includes('api.help()')))
-    if (process.env.AUV_AGENT_CONNECTED_SCREENSHOT)
+    if (process.env.AUV_AGENT_CONNECTED_SCREENSHOT) {
+      await capture.locator('summary').first().click()
+      await tool.locator('summary').first().scrollIntoViewIfNeeded()
       await page.screenshot({ animations: 'disabled', path: process.env.AUV_AGENT_CONNECTED_SCREENSHOT })
+    }
     await page.getByRole('button', { exact: true, name: 'Start a new agent session' }).click()
     await page.getByText('Connected through the test ACP peer.', { exact: true }).waitFor({ state: 'hidden' })
     await page.getByRole('textbox', { name: 'Message the agent' }).fill('Check the new session')
@@ -110,38 +129,37 @@ async function verifyAgentConnection(browser, url) {
     supported = false
     const newSessions = messages.filter(message => message.method === 'session/new').length
     await page.getByRole('button', { exact: true, name: 'Connect' }).click()
-    await page.getByText('This agent does not support MCP over ACP.', { exact: false }).waitFor()
+    await page.getByText('This agent does not support HTTP MCP.', { exact: false }).waitFor()
     assert.equal(await page.getByRole('textbox', { name: 'Message the agent' }).count(), 0)
     assert.equal(messages.filter(message => message.method === 'session/new').length, newSessions)
     assert.deepEqual(errors, [])
-    return { connectionPreserved: true, deviceDirectory: true, liveAccessToken: true, newSessionBriefing: true, unsupportedAgentBlocked: true }
+    return { connectionPreserved: true, deviceDirectory: true, inspectableToolResults: true, liveAccessToken: true, newSessionBriefing: true, unsupportedAgentBlocked: true }
+  }
+  catch (error) {
+    console.error('Agent UI state:', await page.locator('body').textContent())
+    console.error('ACP methods:', messages.map(message => message.method ?? 'response'))
+    throw error
   }
   finally {
     await page.close()
+    for (const client of clients)
+      await client.close()
     for (const socket of server.clients)
       socket.terminate()
     await new Promise(resolve => server.close(resolve))
   }
 }
 
-/** Exercise the real browser worker and SDK with a fake ACP peer and real MCP client. */
+/** Exercise the real browser worker through Exterior's MCP socket and standard HTTP MCP. */
 async function verifyBrowser() {
   const root = fileURLToPath(new URL('../', import.meta.url))
-  const vite = await createServer({ configFile: `${root}/vite.config.ts`, define: { 'import.meta.env.VITE_EXTERIOR_URL': JSON.stringify('http://127.0.0.1:8787') }, root, server: { host: '127.0.0.1', port: 0 } })
+  const relay = await createMcpRelay()
+  const vite = await createServer({ cacheDir: 'node_modules/.vite-browser-check', configFile: `${root}/vite.config.ts`, define: { 'import.meta.env.VITE_EXTERIOR_URL': JSON.stringify(relay.url) }, root, server: { host: '127.0.0.1', port: 0 } })
   await vite.listen()
-  const webSocket = new WebSocketServer({ host: '127.0.0.1', port: 0 })
-  await new Promise(resolve => webSocket.once('listening', resolve))
   const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined), headless: true })
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } })
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  const input = new PassThrough()
-  const output = new PassThrough()
-  const proxy = await startProxy({ args: [fileURLToPath(new URL('./fake-agent.fixture.mjs', import.meta.url))], command: process.execPath, input, output })
-  webSocket.on('connection', (socket) => {
-    socket.on('message', data => input.write(`${data.toString()}\n`))
-    createInterface({ input: output }).on('line', line => socket.send(line))
-  })
   const client = new Client({ name: 'browser-check', version: '1' })
   try {
     await page.goto(vite.resolvedUrls.local[0])
@@ -175,32 +193,15 @@ async function verifyBrowser() {
         throw new Error('Editor REPL setup failed')
     })
     const server = await page.evaluate(async (url) => {
-      const { CodeModeHost, codeModeStream } = await import('/playground/src/features/agent/codemode-bridge.ts')
-      const socket = new WebSocket(url)
-      await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }))
-      const raw = {
-        readable: new ReadableStream({ start(controller) { socket.addEventListener('message', event => controller.enqueue(JSON.parse(event.data))) } }),
-        writable: new WritableStream({ write(message) { socket.send(JSON.stringify(message)) } }),
-      }
+      const { CodeModeHost } = await import('/playground/src/features/agent/codemode-bridge.ts')
+      const { serveMcp } = await import('/playground/src/features/agent/exterior.ts')
       const host = new CodeModeHost()
-      const stream = codeModeStream(raw, host, new AbortController().signal, (supported) => {
-        window.codemodeSupported = supported
-      })
-      const reader = stream.readable.getReader()
-      const writer = stream.writable.getWriter()
-      await writer.write({ id: 1, jsonrpc: '2.0', method: 'initialize', params: { clientCapabilities: {}, protocolVersion: 1 } })
-      await reader.read()
-      await writer.write({ id: 2, jsonrpc: '2.0', method: 'session/new', params: { cwd: '/', mcpServers: [] } })
-      const message = (await reader.read()).value
-      host.setSession(message.result.sessionId)
+      const endpoint = await serveMcp(url, 'browser-check', transport => void host.connect(transport))
+      host.setSession('browser-check')
       window.codemodeHost = host
-      void (async () => {
-        while (!(await reader.read()).done) {
-          // Consume ordinary ACP traffic while the stream handles tool calls.
-        }
-      })()
-      return message.result._meta.receivedServers[0]
-    }, `ws://127.0.0.1:${webSocket.address().port}`)
+      window.codemodeEndpoint = endpoint
+      return { headers: endpoint.headers, url: endpoint.url }
+    }, relay.url)
     await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])) } }))
     await page.evaluate(() => {
       window.savedBackend = window.playgroundState().backend
@@ -337,14 +338,13 @@ async function verifyBrowser() {
     const editorRun = await page.evaluate(async () => (await import('/playground/src/runtime/session.ts')).session.run({ mode: 'run', source: 'editorValue;', startLine: 1 }))
     assert.equal(editorRun.value, 99)
     assert.equal(errors.length, 0, errors.join('\n'))
-    const agentUi = await verifyAgentConnection(browser, vite.resolvedUrls.local[0])
+    const agentUi = await verifyAgentConnection(browser, vite.resolvedUrls.local[0], relay, result.content.find(item => item.type === 'image'))
     console.info(JSON.stringify({ agentUi, calls, cancellation: true, continuousHistoryAndDesktop: true, discoveryAndHelpExample: true, editorStatePreserved: true, images: true, mountedTabsPreserved: true, sourceHistory: true, stateRollback: true, timeoutAndRecovery: true, viewportFit: true }, null, 2))
   }
   finally {
     await client.close()
-    proxy.close()
-    webSocket.close()
     await browser.close()
+    await relay.close()
     await vite.close()
   }
 }

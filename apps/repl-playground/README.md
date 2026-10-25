@@ -45,7 +45,7 @@ controlled desktop.
   as a device, so scripts, the timeline and replay behave the same on it.
 - **Agent / Script tabs**: share the center panel. Sign in with Exterior and
   connect a codemode agent. Tab switches retain the connection and editor.
-  Through MCP over ACP, the agent calls `codemode` to execute code
+  Through Exterior's HTTP MCP endpoint, the agent calls `codemode` to execute code
   against the selected Device or mock desktop. Explicit output returns to the
   agent; SDK calls appear in the timeline. Connections require codemode.
   A new connection starts a fresh agent process; disconnect ends it.
@@ -244,29 +244,21 @@ by name in cells, e.g. `function toolbar(win: Area): Area`.
 ## Agent codemode
 
 The playground supplies its own code tool to an ACP agent. Pi is not required.
-The browser declares an ACP MCP server in `session/new.mcpServers`.
-The agent calls `tools/list` and `tools/call` through standard `mcp/message` requests.
-The browser requires no public listener.
-Native agents advertise `agentCapabilities.mcpCapabilities.acp` and need no proxy.
-MCP over ACP is currently an experimental protocol.
+The browser opens an HTTP MCP endpoint through Exterior's `serveMcp` SDK.
+The agent receives its URL and authorization header in `session/new.mcpServers`.
+Exterior forwards MCP messages to the page, where the code runs.
+The agent must advertise `agentCapabilities.mcpCapabilities.http`.
+The Playground remains a static site.
 
-For an HTTP-only agent, `agent/proxy.mjs` converts that declaration to loopback HTTP.
-Tool discovery and execution still use MCP over ACP on the browser connection.
-The adapter contains no Playground tool definition or execution policy.
-It supports the standalone HTTP initialization used by current OpenCode clients.
-
-On the agent device, install this checkout's dependencies.
-The device also needs an Exterior client connected to the same relay.
-Use the [desktop app or CLI daemon](https://github.com/lulu0119/exterior/blob/2205c5c9267a8e0ece3e8cee31cbc073bccabced/docs/manual.md).
-For an HTTP-only agent, configure a custom slot with an absolute adapter path:
+The agent device needs an Exterior client and an installed ACP agent.
+Use the [desktop app or CLI daemon](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/docs/manual.md).
+For example, configure an ordinary OpenCode slot:
 
 ```sh
-exterior agent-config create --name auv --command 'node "<absolute-checkout>/apps/repl-playground/agent/proxy.mjs" -- <ACP executable> <arguments>'
+exterior agent-config create --agent-type opencode
 ```
 
-Replace the placeholders with the actual paths and command.
-The underlying agent must advertise HTTP MCP support.
-Skip this adapter for agents that already advertise native ACP MCP support.
+Use an existing slot if the device already offers the agent.
 Sign in and start the Exterior daemon against the same relay:
 
 ```sh
@@ -278,13 +270,13 @@ Keep the client running while you use the agent.
 For the pinned CLI preview, use this prefix for each command above:
 
 ```sh
-npx --yes --package=https://pkg.pr.new/lulu0119/exterior@2205c5c9267a8e0ece3e8cee31cbc073bccabced -- exterior
+npx --yes --package=https://pkg.pr.new/lulu0119/exterior@aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e -- exterior
 ```
 
 Set `VITE_EXTERIOR_URL` to that relay origin before the Playground starts or
 builds. Its default is `http://127.0.0.1:8787`.
 
-The adapter uses `@exterioragentprotocol/sdk` for EAP v1.
+The Agent tab uses `@exterioragentprotocol/sdk` for EAP v1.
 Exterior no longer supports anonymous app registration.
 The default client identity is
 `https://auv.moeru.ai/playground/oauth-client.json`.
@@ -294,7 +286,7 @@ The local page can stay on `http://127.0.0.1:5180/playground/`.
 The document lists callbacks for both `127.0.0.1` and `localhost`.
 
 Before publication, follow Exterior's
-[app setup](https://github.com/lulu0119/exterior/blob/2205c5c9267a8e0ece3e8cee31cbc073bccabced/docs/app-setup.md).
+[app setup](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/docs/app-setup.md).
 You can also use **Register app** on the relay dashboard.
 The setup link contains the app name and its exact callback.
 After you sign in and confirm registration, your assistant reads the public client id.
@@ -431,7 +423,8 @@ store (zustand) ─▶ canvas, timeline, inspector, editor decorations
   credential, forwards them to the backend's transport and records them.
 - Codemode uses a temporary worker and an isolated QuickJS VM. It shares the
   compiler, SDK bridge, recording backend and timeline with the editor.
-  `agent/proxy.mjs` adapts HTTP-only agents to the browser's ACP MCP server.
+  Exterior serves the HTTP MCP transport. The browser's MCP server calls the
+  same codemode host, without a custom agent startup wrapper.
 - `runtime/rpc-resources.ts` turns recorded SDK messages into host-side
   resources (frames, text, receipts, windows, displays) by protobuf type.
 - `src/components` holds store-agnostic UI building blocks (icon buttons, tab

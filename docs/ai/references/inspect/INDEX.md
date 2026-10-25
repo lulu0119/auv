@@ -2,12 +2,20 @@
 
 AUV tracing, run storage, artifact delivery, and inspect viewer contracts
 
-Count: **21**
+Count: **23**
 
 ## Current
 
+- [`2026-10-25-playground-session-completeness-review.md`](2026-10-25-playground-session-completeness-review.md)
+  (latest Mock test evidence, agent coverage overclaims, serial invocation guidance,
+  SDK selector mistakes, and hidden nested tool errors)
+
+- [`2026-10-25-playground-http-mcp-design.md`](2026-10-25-playground-http-mcp-design.md)
+  (Exterior-hosted HTTP MCP, browser execution ownership, connection lifetime,
+  and live remote Relay evidence)
+
 - [`2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md`](2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md)
-  (native ACP MCP, HTTP-only OpenCode adapter, VM marshalling and startup fixes,
+  (historical ACP transport, VM marshalling and startup fixes,
   stress-test diagnosis, and retained complete statement history)
 
 - [`2026-10-25-playground-codemode-session-history.md`](2026-10-25-playground-codemode-session-history.md)

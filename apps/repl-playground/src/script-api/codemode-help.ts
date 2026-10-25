@@ -20,6 +20,7 @@ export interface ApiType {
 }
 
 export const codeModeRules = [
+  'Call codemode sequentially, including help queries. Wait for each tool result before starting the next call. Calls share one mutable desktop.',
   'Help describes the SDK contract, not verified support on every device. Platform calls can return UNIMPLEMENTED.',
   'Arguments must be data; SDK bigint IDs retain precision. Callbacks, AbortSignal, generators, and async iterators cannot cross the VM. The host cancels the whole execution.',
   'A plain { x, y } is window-local on WindowClient and screen space on auv.input. A text match clicks at the center of its screen bounds.',

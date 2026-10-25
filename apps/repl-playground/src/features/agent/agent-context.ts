@@ -14,6 +14,7 @@ export function sandboxBriefing(): string {
   return [
     briefingOpening,
     'Your codemode MCP tool executes TypeScript in this page against its selected Device or mock desktop. Your local files and shell do not reach that environment.',
+    'Call codemode sequentially, including help queries. Wait for each tool result before starting the next call. Calls share one mutable desktop.',
     'Use `auv` for SDK calls, `sdk` for input policy and geometry helpers, `text(value)` or `return` for selected results, and `await image(capture)` to show a capture reference as a bounded PNG.',
     'Use `text(api.help())` for the quick start, `text(api.search({ query: "window text" }))` to find methods, and `text(api.describe({ path: "WindowClient.findText" }))` for exact arguments, return fields, related types, and runnable examples. Search results are paginated. Read help before guessing a method or parameter.',
     `Core SDK signatures:\n${createApiHelp(catalog).help().starter.map(entry => entry.signature).join('\n')}`,

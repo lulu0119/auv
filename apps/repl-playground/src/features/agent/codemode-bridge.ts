@@ -1,13 +1,19 @@
-import type { AnyMessage, MessageMcpRequest, MessageMcpResponse, Stream } from '@agentclientprotocol/sdk'
+import type { AnyMessage, Stream } from '@agentclientprotocol/sdk'
+import type { ServedMcp } from '@exterioragentprotocol/sdk/client'
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js'
+
+import { version } from '../../../package.json'
 import { session } from '../../runtime/session'
 import { applyScriptToEditor } from './editor-bridge'
 
 interface CodeCall { code: string, sessionId: string, timeoutMs: number }
 
 const tool = {
-  description: 'Execute TypeScript in the connected AUV Playground. Start with text(api.help()). Find SDK methods with text(api.search({query:"window text"})); read signatures, types and examples with text(api.describe({path:"WindowClient.findText"})). Use auv for the selected device, sdk for constants and geometry, text(value) or return for output, await image(capture) for bounded screenshots, and store/load for small JSON state. Each call has fresh variables. Delivered inputs are not rolled back on failure. SDK callbacks and async iterators are not supported yet.',
+  description: 'Execute TypeScript in the connected AUV Playground. Call codemode sequentially, including help queries. Wait for each tool result before starting the next call. Start with text(api.help()). Find SDK methods with text(api.search({query:"window text"})); read signatures, types and examples with text(api.describe({path:"WindowClient.findText"})). Use auv for the selected device, sdk for constants and geometry, text(value) or return for output, await image(capture) for bounded screenshots, and store/load for small JSON state. Each call has fresh variables. Delivered inputs are not rolled back on failure. SDK callbacks and async iterators are not supported yet.',
   inputSchema: {
     additionalProperties: false,
     properties: {
@@ -29,6 +35,31 @@ export class CodeModeHost {
   cancel(requestId?: null | number | string): void {
     if (requestId === undefined || this.#active?.id === requestId)
       this.#active?.abort.abort()
+  }
+
+  /** Each Relay MCP session gets its own protocol connection to this execution host. */
+  async connect(transport: Transport): Promise<void> {
+    const server = new Server({ name: 'auv-playground', version }, { capabilities: { tools: {} } })
+    server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [tool] }))
+    server.setRequestHandler(CallToolRequestSchema, async (request, { signal }) => {
+      if (request.params.name !== tool.name)
+        throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${request.params.name}`)
+      // MCP request ids can repeat across sessions. A cancellation belongs only
+      // to this invocation, even when another session uses the same request id.
+      const id = crypto.randomUUID()
+      const cancel = () => this.cancel(id)
+      signal.addEventListener('abort', cancel, { once: true })
+      const args = request.params.arguments
+      try {
+        // TODO(mcp-progress): operation-scoped notifications belong to an
+        // approved streaming/progress tool slice. Return one final result.
+        return await this.execute(id, { ...args, sessionId: this.#sessionId, timeoutMs: args?.timeoutMs ?? 30000 })
+      }
+      finally {
+        signal.removeEventListener('abort', cancel)
+      }
+    })
+    await server.connect(transport)
   }
 
   async execute(id: null | number | string, params: unknown): Promise<CallToolResult> {
@@ -93,41 +124,24 @@ export class CodeModeHost {
 }
 
 /**
- * Provides the browser's MCP server over ACP. The UI adapter owns chat;
- * this stream handles the draft MCP binding and its request cancellation.
+ * Adds the sandbox briefing to ACP chat and ends the browser tool endpoint
+ * with its ACP connection. MCP itself uses Exterior's separate HTTP endpoint.
  */
-export function codeModeStream(stream: Stream, host: CodeModeHost, signal: AbortSignal, onSupport: (supported: boolean) => void, briefing?: () => string): Stream {
+export function codeModeStream(stream: Stream, host: CodeModeHost, signal: AbortSignal, tools: ServedMcp, onSupport: (supported: boolean) => void, briefing?: () => string): Stream {
   const reader = stream.readable.getReader()
   const writer = stream.writable.getWriter()
-  let supported = false
   let briefedSessionId: string | undefined
-  let registration: undefined | { requestId: null | number | string, serverId: string, sessionId?: string }
-  const requests = new Set<null | number | string>()
-  const abort = () => host.cancel()
-  const dispatch = async (id: null | number | string, call: MessageMcpRequest): Promise<MessageMcpResponse> => {
-    const meta = call.params?._meta as Record<string, unknown> | undefined
-    if (meta?.['io.modelcontextprotocol/protocolVersion'] !== '2026-07-28'
-      || !meta['io.modelcontextprotocol/clientCapabilities'] || typeof meta['io.modelcontextprotocol/clientCapabilities'] !== 'object') {
-      throw new Error('MCP-over-ACP requires protocolVersion 2026-07-28 and clientCapabilities in params._meta.')
-    }
-    if (call.method === 'tools/list')
-      return { result: { tools: [tool] } }
-    if (call.method === 'ping')
-      return { result: {} }
-    if (call.method !== 'tools/call')
-      return { error: { code: -32601, message: `Unsupported MCP method: ${call.method}` } }
-    if (call.params?.name !== tool.name)
-      return { error: { code: -32602, message: `Unknown tool: ${String(call.params?.name)}` } }
-    const args = call.params.arguments as Partial<CodeCall> | undefined
-    // TODO(mcp-progress): codemode returns one final result. Operation-scoped
-    // MCP notifications belong to an approved streaming/progress tool slice.
-    return { result: await host.execute(id, { ...args, sessionId: registration?.sessionId, timeoutMs: args?.timeoutMs ?? 30000 }) }
+  let creatingRequest: null | number | string | undefined
+  let supported = false
+  const abort = () => {
+    host.cancel()
+    tools.close()
   }
   signal.addEventListener('abort', abort, { once: true })
   return {
     readable: new ReadableStream<AnyMessage>({
       async cancel(reason) {
-        host.cancel()
+        abort()
         await reader.cancel(reason)
       },
       async start(controller) {
@@ -135,62 +149,43 @@ export function codeModeStream(stream: Stream, host: CodeModeHost, signal: Abort
           for (let next = await reader.read(); !next.done; next = await reader.read()) {
             const message = next.value
             if (!('method' in message) && 'result' in message) {
-              const result = message.result as { agentCapabilities?: { mcpCapabilities?: { acp?: boolean } }, sessionId?: string }
+              const result = message.result as { agentCapabilities?: { mcpCapabilities?: { http?: boolean } }, sessionId?: string }
               if (result?.agentCapabilities) {
-                supported = result.agentCapabilities.mcpCapabilities?.acp === true
+                supported = result.agentCapabilities.mcpCapabilities?.http === true
                 onSupport(supported)
               }
-              if (registration?.requestId === message.id && result?.sessionId) {
-                registration.sessionId = result.sessionId
+              if (creatingRequest === message.id && result?.sessionId)
                 host.setSession(result.sessionId)
-              }
             }
-            if ('method' in message && message.method === 'mcp/message' && 'id' in message) {
-              const call = message.params as MessageMcpRequest
-              requests.add(message.id)
-              const task = supported && registration?.serverId === call?.serverId
-                ? dispatch(message.id, call)
-                : Promise.reject(new Error('This MCP server is not registered on this connection.'))
-              void task.then(
-                result => writer.write({ id: message.id, jsonrpc: '2.0', result }),
-                error => writer.write({ error: { code: -32602, message: error instanceof Error ? error.message : String(error) }, id: message.id, jsonrpc: '2.0' }),
-              ).catch(abort).finally(() => requests.delete(message.id))
-            }
-            else if ('method' in message && message.method === '$/cancel_request') {
-              const params = message.params as undefined | { requestId?: null | number | string }
-              // A malformed notification must not cancel another call.
-              if (params?.requestId !== undefined && requests.has(params.requestId))
-                host.cancel(params.requestId)
-              else controller.enqueue(message)
-            }
-            else {
-              controller.enqueue(message)
-            }
+            controller.enqueue(message)
           }
           controller.close()
         }
         catch (error) { controller.error(error) }
         finally {
-          host.cancel()
+          abort()
           signal.removeEventListener('abort', abort)
         }
       },
     }),
     writable: new WritableStream<AnyMessage>({
       abort: (reason) => {
-        host.cancel()
+        abort()
         return writer.abort(reason)
       },
-      close: () => writer.close(),
+      close: () => {
+        abort()
+        return writer.close()
+      },
       async write(message) {
         if ('method' in message && message.method === 'session/cancel')
           host.cancel()
         let next = message
         if (supported && 'method' in message && message.method === 'session/new' && 'id' in message) {
-          registration = { requestId: message.id, serverId: `auv-playground:${crypto.randomUUID()}` }
+          creatingRequest = message.id
           host.setSession(undefined)
           const params = message.params as { mcpServers?: unknown[] }
-          next = { ...message, params: { ...params, mcpServers: [...(params.mcpServers ?? []), { name: 'auv-playground', serverId: registration.serverId, type: 'acp' }] } }
+          next = { ...message, params: { ...params, mcpServers: [...(params.mcpServers ?? []), { headers: tools.headers, name: 'auv-playground', type: 'http', url: tools.url }] } }
         }
         if (briefing && 'method' in message && message.method === 'session/prompt') {
           const sessionId = (message.params as undefined | { sessionId?: string })?.sessionId ?? ''

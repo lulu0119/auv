@@ -79,7 +79,7 @@ catalog:
   '@moeru/eventa': ^1.0.2
   '@moeru/std': 0.1.0-beta.20
   # NOTICE(exterior-preview): pin the SDK preview until its npm release.
-  '@exterioragentprotocol/sdk': https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@2205c5c9267a8e0ece3e8cee31cbc073bccabced
+  '@exterioragentprotocol/sdk': https://pkg.pr.new/lulu0119/exterior/@exterioragentprotocol/sdk@aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e
   '@napi-rs/cli': ^3.8.6
   '@pnpm/find-workspace-dir': 1000.1.5
   '@types/node': ^26.0.1

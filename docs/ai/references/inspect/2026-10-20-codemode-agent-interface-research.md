@@ -1,5 +1,8 @@
 # Codemode agent interface research
 
+NOTICE: Local proxy citations describe a retired transport implementation.
+The [HTTP MCP migration](2026-10-25-playground-http-mcp-design.md) records the current agent connection contract.
+
 Source inspection date: 2026-10-20.
 
 Evidence level: source inspection. This note makes no execution, performance, or agent task-success claims.

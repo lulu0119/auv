@@ -1,9 +1,10 @@
+import type { ToolCallContent } from '@agentclientprotocol/sdk'
 import type { ReasoningMessagePartComponent, TextMessagePartComponent, ToolCallMessagePartComponent } from '@assistant-ui/react'
 
 import Markdown from 'react-markdown'
 
 import { AuiIf, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react'
-import { useAcpPermissions, useAcpRuntimeExtras } from '@hafbit/react-acp'
+import { useAcpPermissions, useAcpRuntimeExtras, useAcpSession } from '@hafbit/react-acp'
 import { useState } from 'react'
 
 import { iconButtonClassName } from '../../components/icon-button-class'
@@ -75,14 +76,55 @@ const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
   )
 }
 
-const AgentTool: ToolCallMessagePartComponent = ({ argsText, status, toolName }) => (
-  <div className="text-[12px] text-fg-muted px-2 py-1 border border-line rounded-md bg-surface-0 flex gap-2 items-center">
-    <span className="i-ph-wrench shrink-0" />
-    <span className="font-mono flex-1 truncate">{toolName}</span>
-    <span className="shrink-0">{status?.type ?? ''}</span>
-    {argsText && <span className="text-fg-subtle font-mono max-w-48 truncate">{argsText}</span>}
-  </div>
-)
+const AgentTool: ToolCallMessagePartComponent = ({ argsText, result, status, toolCallId, toolName }) => {
+  const tool = useAcpSession()?.tools[toolCallId]?.value
+  const content = tool?.content
+  return (
+    <details className="text-[12px] text-fg-muted border border-line rounded-md bg-surface-0 min-w-0">
+      <summary className="px-2 py-1 cursor-pointer">
+        <span className="font-mono">{tool?.title ?? toolName}</span>
+        {/* A wrapper can complete and return a nested error. Keep its ACP
+            status and the returned result separate instead of guessing status. */}
+        <span className="ml-2">{status?.type ?? ''}</span>
+      </summary>
+      <div className="px-2 pb-2 flex flex-col gap-2">
+        <div>
+          <div className="text-fg-subtle">Input</div>
+          <pre className="font-mono whitespace-pre-wrap break-words">{argsText}</pre>
+        </div>
+        {(!!content?.length || result !== undefined) && (
+          <div>
+            <div className="text-fg-subtle">Result</div>
+            {content?.length
+              ? content.map((part, index) => (
+                  // eslint-disable-next-line react/no-array-index-key -- ACP supplies ordered blocks without IDs; this renderer has no local state.
+                  <AgentToolContent content={part} key={index} />
+                ))
+              : <pre className="font-mono whitespace-pre-wrap break-words">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
+          </div>
+        )}
+        {!!content?.length && tool?.rawOutput !== undefined && (
+          <details>
+            <summary className="text-fg-subtle cursor-pointer">Raw output</summary>
+            <pre className="font-mono whitespace-pre-wrap break-words">{typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)}</pre>
+          </details>
+        )}
+      </div>
+    </details>
+  )
+}
+
+/** Render ACP text and screenshots without turning image bytes into a JSON wall. */
+function AgentToolContent({ content }: { content: ToolCallContent }) {
+  if (content.type === 'content') {
+    const block = content.content
+    if (block.type === 'text')
+      return <pre className="font-mono whitespace-pre-wrap break-words">{block.text}</pre>
+    if (block.type === 'image')
+      return <img alt="Tool result" className="mt-1 rounded h-auto max-w-full" loading="lazy" src={`data:${block.mimeType};base64,${block.data}`} />
+  }
+  return <pre className="font-mono whitespace-pre-wrap break-words">{JSON.stringify(content, null, 2)}</pre>
+}
 
 const UserText: TextMessagePartComponent = ({ text }) => {
   if (isSandboxBriefing(text)) {

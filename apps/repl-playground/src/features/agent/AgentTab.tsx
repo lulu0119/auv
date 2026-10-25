@@ -90,6 +90,7 @@ export function AgentTab() {
   }
   return (
     <AgentSession
+      accessToken={session.accessToken}
       connection={ticket}
       onDisconnect={disconnect}
       onInfantDeath={handleInfantDeath}
@@ -121,7 +122,7 @@ function ConnectView({ onConnected, session }: {
         if (cancelled)
           return
         setTargets(listed)
-        setStatus(listed.length === 0 ? 'No agent is available. On the agent device, configure the Playground proxy and run exterior daemon.' : '')
+        setStatus(listed.length === 0 ? 'No agent is available. Add an agent in Exterior on the device you want to use.' : '')
       })
       .catch((error: unknown) => {
         if (!cancelled)
@@ -138,7 +139,7 @@ function ConnectView({ onConnected, session }: {
   if (session.account.phase === 'signed-out') {
     return (
       <div className="p-3 flex flex-col gap-2">
-        <Hint>Connect an agent through Exterior to operate the playground. The agent device must have the Playground proxy configured.</Hint>
+        <Hint>Connect an agent through Exterior to operate the playground. Choose an agent that supports HTTP MCP.</Hint>
         <button className="btn-primary self-start" disabled={session.busy} onClick={session.signIn} type="button">
           <span className={session.busy ? 'i-ph-circle-notch animate-spin' : 'i-ph-sign-in'} />
           Sign in with Exterior

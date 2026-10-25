@@ -1,5 +1,8 @@
 # Exterior EAP SDK migration
 
+NOTICE: The [HTTP MCP migration](2026-10-25-playground-http-mcp-design.md) supersedes
+the package pin and agent-wrapper setup below. The account identity and OAuth diagnosis remain relevant.
+
 Date: 2026-10-23.
 Updated: 2026-10-25.
 Change classification: bug fix.

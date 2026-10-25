@@ -1,5 +1,8 @@
 # Playground ACP MCP and codemode diagnosis
 
+Status: historical transport record. The codemode bug evidence remains relevant.
+The [HTTP MCP migration](2026-10-25-playground-http-mcp-design.md) replaces the native ACP MCP transport and local agent wrapper.
+
 ## Scope and evidence
 
 The owner approved native MCP over ACP and requested causes before fixes.

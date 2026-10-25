@@ -1,5 +1,7 @@
 import type { AnyMessage } from '@agentclientprotocol/sdk'
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CodeModeHost, codeModeStream, withBriefing } from './codemode-bridge'
@@ -8,7 +10,58 @@ const execution = vi.hoisted(() => ({ run: vi.fn(), running: false }))
 vi.mock('../../runtime/session', () => ({ session: execution }))
 vi.mock('./editor-bridge', () => ({ applyScriptToEditor: vi.fn() }))
 
-describe('codemode ACP browser host', () => {
+describe('codemode browser MCP host', () => {
+  it('serves standard MCP before ACP session creation and binds execution to the active session', async () => {
+    const host = new CodeModeHost()
+    const [agent, page] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'agent', version: '1' })
+    await host.connect(page)
+    await client.connect(agent)
+    try {
+      expect((await client.listTools()).tools).toMatchObject([{ name: 'codemode' }])
+      expect((await client.callTool({ arguments: { code: 'return 1' }, name: 'codemode' })).isError).toBe(true)
+      host.setSession('one')
+      execution.run.mockResolvedValueOnce({ codemode: { content: [{ text: 'result', type: 'text' }], store: {} }, status: 'ok' })
+      expect(await client.callTool({ arguments: { code: 'text(1)' }, name: 'codemode' })).toMatchObject({ content: [{ text: 'result' }, { text: expect.stringContaining('Script completed') }], isError: false })
+      expect(execution.run.mock.lastCall?.[0].codemode.timeoutMs).toBe(30000)
+    }
+    finally {
+      await client.close()
+    }
+  })
+
+  it('cancels the MCP invocation without affecting calls from another transport', async () => {
+    const host = new CodeModeHost()
+    host.setSession('one')
+    const clients = await Promise.all([1, 2].map(async () => {
+      const [agent, page] = InMemoryTransport.createLinkedPair()
+      const client = new Client({ name: 'agent', version: '1' })
+      await host.connect(page)
+      await client.connect(agent)
+      return client
+    }))
+    let finish!: (value: unknown) => void
+    execution.run.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve
+    }))
+    const controller = new AbortController()
+    const call = clients[0]!.callTool({ arguments: { code: 'await operation()' }, name: 'codemode' }, undefined, { signal: controller.signal })
+    const rejection = expect(call).rejects.toThrow()
+    try {
+      await vi.waitFor(() => expect(execution.run.mock.lastCall?.[0].source).toBe('await operation()'))
+      const signal = execution.run.mock.lastCall?.[0].signal as AbortSignal
+      await clients[1]!.close()
+      expect(signal.aborted).toBe(false)
+      controller.abort()
+      await rejection
+      await vi.waitFor(() => expect(signal.aborted).toBe(true))
+      finish({ reason: 'canceled', status: 'stopped' })
+    }
+    finally {
+      await clients[0]!.close()
+    }
+  })
+
   it('keeps state in the active session and commits only successful executions', async () => {
     const host = new CodeModeHost()
     host.setSession('one')
@@ -43,54 +96,6 @@ describe('codemode ACP browser host', () => {
     expect((await first).isError).toBe(true)
   })
 
-  it('handles reverse requests without putting them in the normal ACP transcript', async () => {
-    const host = new CodeModeHost()
-    host.setSession('one')
-    execution.run.mockResolvedValueOnce({ codemode: { content: [{ text: 'result', type: 'text' }], store: {} }, status: 'ok' })
-    let incoming!: ReadableStreamDefaultController<AnyMessage>
-    const replies: AnyMessage[] = []
-    const support = vi.fn()
-    const raw = {
-      readable: new ReadableStream<AnyMessage>({ start: (controller) => { incoming = controller } }),
-      writable: new WritableStream<AnyMessage>({ write: (message) => { replies.push(message) } }),
-    }
-    const stream = codeModeStream(raw, host, new AbortController().signal, support)
-    const reader = stream.readable.getReader()
-    incoming.enqueue({ id: 1, jsonrpc: '2.0', result: { agentCapabilities: { mcpCapabilities: { acp: true } } } })
-    expect((await reader.read()).value).toMatchObject({ id: 1 })
-    const writer = stream.writable.getWriter()
-    await writer.write({ id: 2, jsonrpc: '2.0', method: 'session/new', params: { cwd: '/', mcpServers: [] } })
-    const declaration = (replies[0] as { params: { mcpServers: Array<{ serverId: string, type: string }> } }).params.mcpServers[0]!
-    expect(declaration.type).toBe('acp')
-    incoming.enqueue({ id: 2, jsonrpc: '2.0', result: { sessionId: 'one' } })
-    await reader.read()
-    incoming.enqueue({ id: 'code-call', jsonrpc: '2.0', method: 'mcp/message', params: {
-      method: 'tools/call',
-      params: { _meta: { 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/protocolVersion': '2026-07-28' }, arguments: { code: 'text(1)', timeoutMs: 1000 }, name: 'codemode' },
-      requestId: 'logical-id',
-      serverId: declaration.serverId,
-    } })
-    incoming.enqueue({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'one' } })
-    expect((await reader.read()).value).toMatchObject({ method: 'session/update' })
-    await vi.waitFor(() => expect(replies[1]).toMatchObject({ id: 'code-call', result: { result: { content: [{ text: 'result' }, { text: expect.stringContaining('Script completed') }], isError: false } } }))
-    expect(support).toHaveBeenCalledWith(true)
-    const call = { method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } }, requestId: 'catalog', serverId: declaration.serverId }
-    incoming.enqueue({ id: 'catalog', jsonrpc: '2.0', method: 'mcp/message', params: call })
-    incoming.enqueue({ id: 'bad-server', jsonrpc: '2.0', method: 'mcp/message', params: { ...call, serverId: 'not-registered' } })
-    incoming.enqueue({ id: 'bad-metadata', jsonrpc: '2.0', method: 'mcp/message', params: { ...call, params: {} } })
-    incoming.enqueue({ id: 'bad-method', jsonrpc: '2.0', method: 'mcp/message', params: { ...call, method: 'no-such-method' } })
-    await vi.waitFor(() => expect(replies).toHaveLength(6))
-    expect(replies.find(reply => 'id' in reply && reply.id === 'catalog')).toMatchObject({ result: { result: { tools: [{ name: 'codemode' }] } } })
-    expect(replies.find(reply => 'id' in reply && reply.id === 'bad-server')).toMatchObject({ error: { code: -32602 } })
-    expect(replies.find(reply => 'id' in reply && reply.id === 'bad-metadata')).toMatchObject({ error: { code: -32602 } })
-    expect(replies.find(reply => 'id' in reply && reply.id === 'bad-method')).toMatchObject({ result: { error: { code: -32601 } } })
-    // Cancellation of another ACP service still belongs to the UI SDK.
-    incoming.enqueue({ jsonrpc: '2.0', method: '$/cancel_request', params: { requestId: 'permission-call' } })
-    expect((await reader.read()).value).toMatchObject({ method: '$/cancel_request' })
-    incoming.close()
-    await reader.read()
-  })
-
   it('distinguishes the host deadline from an explicit cancellation', async () => {
     const host = new CodeModeHost()
     host.setSession('one')
@@ -102,6 +107,33 @@ describe('codemode ACP browser host', () => {
     expect(canceled.content).toEqual([{ text: 'Script canceled. Delivered inputs are not undone.', type: 'text' }])
   })
 
+  it('passes the Relay HTTP endpoint through ACP and closes it with the connection', async () => {
+    const host = new CodeModeHost()
+    let incoming!: ReadableStreamDefaultController<AnyMessage>
+    const messages: AnyMessage[] = []
+    const tools = { close: vi.fn(), closed: new Promise<undefined>(() => {}), headers: [{ name: 'Authorization', value: 'Bearer fixture' }], url: 'https://relay.example/eap/v1/mcp' }
+    const support = vi.fn()
+    const raw = {
+      readable: new ReadableStream<AnyMessage>({ start: controller => void (incoming = controller) }),
+      writable: new WritableStream<AnyMessage>({ write: message => void messages.push(message) }),
+    }
+    const stream = codeModeStream(raw, host, new AbortController().signal, tools, support)
+    const reader = stream.readable.getReader()
+    const writer = stream.writable.getWriter()
+    incoming.enqueue({ id: 1, jsonrpc: '2.0', result: { agentCapabilities: { mcpCapabilities: { http: true } } } })
+    await reader.read()
+    await writer.write({ id: 2, jsonrpc: '2.0', method: 'session/new', params: { cwd: '/', mcpServers: [] } })
+    expect(messages[0]).toMatchObject({ params: { mcpServers: [{ headers: tools.headers, name: 'auv-playground', type: 'http', url: tools.url }] } })
+    expect(support).toHaveBeenCalledWith(true)
+    incoming.enqueue({ id: 2, jsonrpc: '2.0', result: { sessionId: 'one' } })
+    await reader.read()
+    execution.run.mockResolvedValueOnce({ codemode: { content: [], store: {} }, status: 'ok' })
+    expect((await host.execute(1, { code: 'return 1', sessionId: 'one', timeoutMs: 1000 })).isError).toBe(false)
+    incoming.close()
+    await reader.read()
+    expect(tools.close).toHaveBeenCalled()
+  })
+
   // Briefing state is scoped to the active session on a shared ACP stream.
   it('attaches the sandbox briefing to each session first prompt', async () => {
     const host = new CodeModeHost()
@@ -110,7 +142,8 @@ describe('codemode ACP browser host', () => {
       readable: new ReadableStream<AnyMessage>({ start() {} }),
       writable: new WritableStream<AnyMessage>({ write: message => void replies.push(message) }),
     }
-    const stream = codeModeStream(raw, host, new AbortController().signal, () => {}, () => 'briefing')
+    const tools = { close: vi.fn(), closed: new Promise<undefined>(() => {}), headers: [], url: 'https://relay.example/eap/v1/mcp' }
+    const stream = codeModeStream(raw, host, new AbortController().signal, tools, () => {}, () => 'briefing')
     const writer = stream.writable.getWriter()
     const prompt = { id: 1, jsonrpc: '2.0' as const, method: 'session/prompt' as const, params: { prompt: [{ text: 'hi', type: 'text' }], sessionId: 'one' } }
     await writer.write(prompt)

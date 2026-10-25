@@ -8,6 +8,7 @@ import { useAccount as useExteriorAccount } from '@exterioragentprotocol/sdk/cli
 const defaultRelayUrl = 'http://127.0.0.1:8787'
 
 export type { AccountSession }
+export { serveMcp } from '@exterioragentprotocol/sdk/client'
 
 /** A discoverable agent slot and the device's default ACP working directory. */
 export interface AgentTarget {
@@ -34,6 +35,20 @@ export async function openAgentConnection(openConnection: AccountSession['openCo
   return { cwd: target.cwd, label: target.label, url: ticket.url }
 }
 
+// `VITE_EXTERIOR_URL` is a build-time relay origin. Use Exterior's local
+// default when no valid override is configured, matching the upstream app.
+export function relayUrl(): string {
+  const configured = import.meta.env.VITE_EXTERIOR_URL
+  if (!configured)
+    return defaultRelayUrl
+  try {
+    return new URL(configured).origin
+  }
+  catch {
+    return defaultRelayUrl
+  }
+}
+
 /** Exterior owns sign-in; this adapter supplies the Playground callback route. */
 export function useAccount(): AccountSession {
   // The playground is served below `/playground/`, but the upstream callback
@@ -47,18 +62,4 @@ export function useAccount(): AccountSession {
     redirectUri: new URL(callback, window.location.origin).href,
     returnTo: base,
   })
-}
-
-// `VITE_EXTERIOR_URL` is a build-time relay origin. Use Exterior's local
-// default when no valid override is configured, matching the upstream app.
-function relayUrl(): string {
-  const configured = import.meta.env.VITE_EXTERIOR_URL
-  if (!configured)
-    return defaultRelayUrl
-  try {
-    return new URL(configured).origin
-  }
-  catch {
-    return defaultRelayUrl
-  }
 }

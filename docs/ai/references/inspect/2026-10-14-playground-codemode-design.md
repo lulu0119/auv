@@ -6,20 +6,16 @@ The Playground supplies one `codemode({ code, timeoutMs })` MCP tool to an ACP a
 The browser executes each call against its selected AUV Device or mock desktop.
 The agent receives explicit output and execution status through the tool response.
 
-The browser declares a native ACP MCP server in `session/new.mcpServers`.
-Agents advertise `agentCapabilities.mcpCapabilities.acp` before session creation.
-Tool discovery and execution use request-scoped `mcp/message` operations.
-Cancellation uses `$/cancel_request`; inner MCP errors retain their MCP meaning.
-The native binding uses MCP 2026-07-28 and is experimental.
-
-HTTP-only agents use an adapter on the agent device.
-It converts native server declarations to authenticated loopback HTTP addresses.
-Current OpenCode clients also need a standalone HTTP initialization handshake.
-The adapter terminates that handshake and supplies native metadata per operation.
-It contains no Playground-specific tools or execution policy.
-Native-capable agents work directly without this adapter.
-The former `_meta.auv.codemode` and `_auv/codemode` methods are removed.
-See the [ACP migration and diagnosis](2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md).
+The browser opens an MCP endpoint through Exterior's `serveMcp` SDK.
+It declares the endpoint's HTTP URL and headers in `session/new.mcpServers`.
+Agents advertise `agentCapabilities.mcpCapabilities.http` before session creation.
+Exterior serves Streamable HTTP and forwards MCP messages over the page's MCP socket.
+The page connects a standard MCP SDK server to each supplied transport.
+Tool discovery works before ACP session creation finishes.
+MCP cancellation aborts the associated tool handler's signal.
+The endpoint belongs to one ACP connection attempt and ends with that connection.
+An ordinary HTTP-capable ACP agent works without an application-specific startup wrapper.
+See the [HTTP MCP migration and evidence](2026-10-25-playground-http-mcp-design.md).
 
 Each call uses a temporary Worker with a fresh QuickJS/WASM context.
 The guest has a 64 MiB memory limit and no filesystem, network, or browser globals.
@@ -47,7 +43,8 @@ Successful execution does not prove semantic task success; app state supplies th
 
 `src/features/agent/exterior.ts` owns the concrete Exterior connection adapter.
 It supplies relay configuration, authentication, callback routes, device discovery, and one-time tickets.
-The ACP consumer accepts `{ url, label, cwd }` without an Exterior dependency.
+The ACP consumer accepts `{ url, label, cwd }` and a live account-token function.
+It opens the Exterior MCP endpoint before its ACP socket starts.
 The adapter supplies the agent device's `workingDirectory` as `cwd`.
 The agent device and selected AUV Device are independent.
 
