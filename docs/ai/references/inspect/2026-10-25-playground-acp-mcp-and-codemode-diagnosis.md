@@ -95,9 +95,9 @@ Completed bridge promises release their host handles promptly.
 Full statement and binding history still makes a million-iteration browser loop exceed ten seconds.
 That remaining behavior has not been fixed or presented as passing.
 
-An owner decision is pending: keep full statement history, or record codemode state at SDK/output boundaries.
-All SDK calls, captures, and explicit output would remain recorded under the proposed boundary model.
-The editor's debugger behavior would remain separately defined.
+The owner declined SDK/output-boundary sampling and retained complete statement and binding history.
+The remaining CPU-loop cost stays a known limitation.
+The editor's debugger behavior stays unchanged.
 
 Run the red performance reproduction explicitly:
 

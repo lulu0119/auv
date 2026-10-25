@@ -318,9 +318,9 @@ async function verifyBrowser() {
     const allocation = await client.callTool({ arguments: { code: 'const values = new Array(1000000).fill("x"); text(values.length);' }, name: 'codemode' })
     assert.equal(allocation.isError, false, JSON.stringify(allocation))
     assert.ok(allocation.content.some(item => item.text === '1000000'))
-    // TODO(codemode-trace-granularity): this performance reproduction remains
-    // red with complete statement history. Owner approval is required before
-    // switching codemode inspection to SDK/output boundaries.
+    // NOTICE(codemode-trace-granularity): the owner retained complete statement
+    // history. This optional probe reproduces its CPU-loop cost; it is not a
+    // performance guarantee of the normal browser check.
     if (process.env.AUV_CODEMODE_BENCHMARK) {
       const busyStart = Date.now()
       const busy = await client.callTool({ arguments: { code: 'let sum=0; for(let i=0;i<1000000;i++){ sum+=i; } text(sum);', timeoutMs: 10000 }, name: 'codemode' })
