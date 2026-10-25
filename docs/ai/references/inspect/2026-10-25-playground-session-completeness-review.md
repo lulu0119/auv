@@ -1,6 +1,7 @@
 # Playground session completeness review
 
 Status: diagnosis complete. The owner approved the two small fixes described below.
+The later [Agent presentation change](2026-10-25-playground-agent-ui.md) groups tool activity and keeps returned errors and screenshot previews visible.
 
 ## Evidence
 

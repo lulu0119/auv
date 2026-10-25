@@ -139,7 +139,7 @@ function ConnectView({ onConnected, session }: {
   if (session.account.phase === 'signed-out') {
     return (
       <div className="p-3 flex flex-col gap-2">
-        <Hint>Connect an agent through Exterior to operate the playground. Choose an agent that supports HTTP MCP.</Hint>
+        <Hint>Connect an agent on one of your devices to work with this desktop.</Hint>
         <button className="btn-primary self-start" disabled={session.busy} onClick={session.signIn} type="button">
           <span className={session.busy ? 'i-ph-circle-notch animate-spin' : 'i-ph-sign-in'} />
           Sign in with Exterior
@@ -177,7 +177,7 @@ function ConnectView({ onConnected, session }: {
         <button className="btn-ghost" onClick={session.signOut} type="button">Sign out</button>
       </div>
       {status && <span className="text-[12px] text-fg-muted">{status}</span>}
-      <Hint>One connection spawns a fresh agent process on that device. Disconnecting kills it; nothing is kept.</Hint>
+      <Hint>Each connection starts a new agent session on the selected device. The chat closes when you disconnect.</Hint>
     </div>
   )
 }

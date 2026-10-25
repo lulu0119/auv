@@ -1,15 +1,17 @@
-import type { ToolCallContent } from '@agentclientprotocol/sdk'
-import type { ReasoningMessagePartComponent, TextMessagePartComponent, ToolCallMessagePartComponent } from '@assistant-ui/react'
+import type { ReasoningMessagePartComponent, TextMessagePartComponent } from '@assistant-ui/react'
 
 import Markdown from 'react-markdown'
 
-import { AuiIf, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react'
-import { useAcpPermissions, useAcpRuntimeExtras, useAcpSession } from '@hafbit/react-acp'
+import { AuiIf, ComposerPrimitive, groupPartByType, MessagePrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react'
+import { useAcpPermissions, useAcpRuntimeExtras } from '@hafbit/react-acp'
 import { useState } from 'react'
 
 import { iconButtonClassName } from '../../components/icon-button-class'
 import { IconButton } from '../../components/IconButton'
 import { isSandboxBriefing } from './agent-context'
+import { AgentActivity, AgentTool } from './AgentActivity'
+
+import './agent.css'
 
 /**
  * Chat over the live ACP connection: assistant messages, tool-call rows,
@@ -21,21 +23,32 @@ import { isSandboxBriefing } from './agent-context'
  */
 export function AgentThread() {
   return (
-    <ThreadPrimitive.Root className="flex flex-col h-full min-h-0">
+    <ThreadPrimitive.Root className="agent-thread">
       <ApprovalList />
-      <ThreadPrimitive.Viewport className="flex-1 min-h-0 overflow-y-auto">
-        <div className="p-3 flex flex-col gap-3">
-          <ThreadPrimitive.Messages>{() => <AgentMessage />}</ThreadPrimitive.Messages>
-        </div>
-      </ThreadPrimitive.Viewport>
-      <AgentToolbar />
-      <div className="p-2 border-t border-line shrink-0">
-        <ComposerPrimitive.Root className="py-1 pl-2.5 pr-1 border border-line rounded-md bg-surface-1 flex gap-1.5 items-end focus-within:border-accent">
+      <div className="agent-conversation">
+        <ThreadPrimitive.Viewport className="agent-viewport">
+          <ThreadPrimitive.Empty>
+            <div className="agent-empty">
+              <span aria-hidden="true" className="i-ph-cursor-click" />
+              <strong>Work with your desktop</strong>
+              <p>Describe a task. Follow the agent's progress and inspect its results here.</p>
+            </div>
+          </ThreadPrimitive.Empty>
+          <div className="agent-messages">
+            <ThreadPrimitive.Messages>{() => <AgentMessage />}</ThreadPrimitive.Messages>
+          </div>
+        </ThreadPrimitive.Viewport>
+        <ThreadPrimitive.ScrollToBottom aria-label="Jump to latest message" className="agent-jump-latest" type="button">
+          <span className="i-ph-arrow-down" />
+          Latest
+        </ThreadPrimitive.ScrollToBottom>
+      </div>
+      <div className="agent-composer">
+        <ComposerPrimitive.Root className="agent-composer-input">
           <ComposerPrimitive.Input
             aria-label="Message the agent"
-            className="text-[13px] text-fg py-1 outline-none bg-transparent flex-1 min-w-0 placeholder:text-fg-subtle"
-            maxRows={6}
-            placeholder="Ask the agent to operate the playground…"
+            maxRows={4}
+            placeholder="What would you like to do on this desktop?"
           />
           <AuiIf condition={s => !s.composer.canCancel}>
             <ComposerPrimitive.Send aria-label="Send" className={iconButtonClassName({ tone: 'primary' })}>
@@ -48,6 +61,14 @@ export function AgentThread() {
             </ComposerPrimitive.Cancel>
           </AuiIf>
         </ComposerPrimitive.Root>
+        <div className="agent-composer-meta">
+          <span className="agent-connection-state">
+            <span />
+            Connected
+          </span>
+          <span className="agent-composer-hint">Enter to send</span>
+          <AgentToolbar />
+        </div>
       </div>
     </ThreadPrimitive.Root>
   )
@@ -57,7 +78,7 @@ const AgentText: TextMessagePartComponent = ({ text }) => {
   if (!text)
     return <span className="text-fg-subtle animate-pulse">●</span>
   return (
-    <div className="agent-md text-[12.5px] text-fg leading-relaxed">
+    <div className="agent-md agent-text">
       <Markdown>{text}</Markdown>
     </div>
   )
@@ -76,56 +97,6 @@ const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
   )
 }
 
-const AgentTool: ToolCallMessagePartComponent = ({ argsText, result, status, toolCallId, toolName }) => {
-  const tool = useAcpSession()?.tools[toolCallId]?.value
-  const content = tool?.content
-  return (
-    <details className="text-[12px] text-fg-muted border border-line rounded-md bg-surface-0 min-w-0">
-      <summary className="px-2 py-1 cursor-pointer">
-        <span className="font-mono">{tool?.title ?? toolName}</span>
-        {/* A wrapper can complete and return a nested error. Keep its ACP
-            status and the returned result separate instead of guessing status. */}
-        <span className="ml-2">{status?.type ?? ''}</span>
-      </summary>
-      <div className="px-2 pb-2 flex flex-col gap-2">
-        <div>
-          <div className="text-fg-subtle">Input</div>
-          <pre className="font-mono whitespace-pre-wrap break-words">{argsText}</pre>
-        </div>
-        {(!!content?.length || result !== undefined) && (
-          <div>
-            <div className="text-fg-subtle">Result</div>
-            {content?.length
-              ? content.map((part, index) => (
-                  // eslint-disable-next-line react/no-array-index-key -- ACP supplies ordered blocks without IDs; this renderer has no local state.
-                  <AgentToolContent content={part} key={index} />
-                ))
-              : <pre className="font-mono whitespace-pre-wrap break-words">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
-          </div>
-        )}
-        {!!content?.length && tool?.rawOutput !== undefined && (
-          <details>
-            <summary className="text-fg-subtle cursor-pointer">Raw output</summary>
-            <pre className="font-mono whitespace-pre-wrap break-words">{typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput, null, 2)}</pre>
-          </details>
-        )}
-      </div>
-    </details>
-  )
-}
-
-/** Render ACP text and screenshots without turning image bytes into a JSON wall. */
-function AgentToolContent({ content }: { content: ToolCallContent }) {
-  if (content.type === 'content') {
-    const block = content.content
-    if (block.type === 'text')
-      return <pre className="font-mono whitespace-pre-wrap break-words">{block.text}</pre>
-    if (block.type === 'image')
-      return <img alt="Tool result" className="mt-1 rounded h-auto max-w-full" loading="lazy" src={`data:${block.mimeType};base64,${block.data}`} />
-  }
-  return <pre className="font-mono whitespace-pre-wrap break-words">{JSON.stringify(content, null, 2)}</pre>
-}
-
 const UserText: TextMessagePartComponent = ({ text }) => {
   if (isSandboxBriefing(text)) {
     return (
@@ -136,8 +107,8 @@ const UserText: TextMessagePartComponent = ({ text }) => {
     )
   }
   return (
-    <div className="flex justify-end">
-      <div className="px-3 py-2 rounded-lg bg-surface-2 max-w-[90%] whitespace-pre-wrap">{text}</div>
+    <div className="agent-user-message">
+      <div>{text}</div>
     </div>
   )
 }
@@ -147,8 +118,26 @@ function AgentMessage() {
   if (role === 'user')
     return <MessagePrimitive.Parts components={{ Text: UserText }} />
   return (
-    <div className="min-w-0">
-      <MessagePrimitive.Parts components={{ Reasoning: AgentReasoning, Text: AgentText, tools: { Fallback: AgentTool } }} />
+    <div className="agent-assistant-message">
+      <MessagePrimitive.GroupedParts groupBy={groupPartByType({ 'tool-call': ['group-activity'] })} indicator="empty">
+        {({ children, part }) => {
+          switch (part.type) {
+            case 'data': return part.dataRendererUI
+            case 'group-activity': return <AgentActivity indices={part.indices}>{children}</AgentActivity>
+            case 'image': return <img alt="Agent image" className="max-w-full" src={part.image} />
+            case 'indicator': return (
+              <div aria-live="polite" className="agent-thinking">
+                <span className="i-ph-circle-notch animate-spin" />
+                Thinking…
+              </div>
+            )
+            case 'reasoning': return <AgentReasoning {...part} />
+            case 'text': return <AgentText {...part} />
+            case 'tool-call': return part.toolUI ?? <AgentTool {...part} />
+            default: return null
+          }
+        }}
+      </MessagePrimitive.GroupedParts>
     </div>
   )
 }
@@ -173,11 +162,10 @@ function AgentToolbar() {
   }
 
   return (
-    <div className="px-2 py-1.5 border-t border-line flex shrink-0 gap-1 items-center">
-      <IconButton disabled={busy} hint="Start a new agent session" icon="i-ph-plus" label="New" onClick={newSession} />
-      <span className="text-[11.5px] text-fg-muted">Code execution connected</span>
-      {notice && <span className="text-[11.5px] text-fg-muted flex-1 truncate">{notice}</span>}
-    </div>
+    <>
+      {notice && <span className="text-[11.5px] text-bad flex-1 truncate" role="alert">{notice}</span>}
+      <IconButton disabled={busy} hint="Start a new agent session" icon="i-ph-plus" label="New session" onClick={newSession} />
+    </>
   )
 }
 

@@ -51,6 +51,10 @@ controlled desktop.
   A new connection starts a fresh agent process; disconnect ends it.
   The chat is not persisted. For a remote relay, set `VITE_EXTERIOR_URL`
   at build time.
+  Adjacent tool calls share a compact activity summary. Returned errors and
+  screenshot previews stay visible while details are folded. Open a screenshot
+  to enlarge it. Expand an activity to inspect results, the original script,
+  raw protocol data, and the wrapper's status.
 
 ## Quick start
 

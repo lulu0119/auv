@@ -2,9 +2,13 @@
 
 AUV tracing, run storage, artifact delivery, and inspect viewer contracts
 
-Count: **23**
+Count: **24**
 
 ## Current
+
+- [`2026-10-25-playground-agent-ui.md`](2026-10-25-playground-agent-ui.md)
+  (OpenCode desktop reference, compact Agent activity, returned errors,
+  visible screenshots, and preserved execution details)
 
 - [`2026-10-25-playground-session-completeness-review.md`](2026-10-25-playground-session-completeness-review.md)
   (latest Mock test evidence, agent coverage overclaims, serial invocation guidance,

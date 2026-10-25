@@ -46,9 +46,12 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
         // ROOT CAUSE: the chat rendered only the wrapper's completed status,
         // hiding its input and the failed nested tool result delivered by ACP.
         // OpenCode 2.0.26 sends nested statuses in rawOutput.metadata.toolCalls.
+        notify({ content: { text: 'I will inspect the desktop and check the result.', type: 'text' }, sessionUpdate: 'agent_message_chunk' })
+        notify({ content: [{ content: { text: 'ReferenceError: Unknown identifier \'text\'.', type: 'text' }, type: 'content' }], kind: 'other', rawInput: { code: 'text(api.help());' }, rawOutput: { metadata: { error: true } }, sessionUpdate: 'tool_call', status: 'completed', title: 'execute', toolCallId: 'code-failure' })
         notify({ kind: 'other', rawInput: { code: 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });' }, sessionUpdate: 'tool_call', status: 'in_progress', title: 'execute', toolCallId: 'nested-failure' })
         notify({ content: [{ content: { text: 'Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', type: 'text' }, type: 'content' }], rawOutput: { metadata: { toolCalls: [{ status: 'error', tool: 'auv-playground.codemode' }] } }, sessionUpdate: 'tool_call_update', status: 'completed', toolCallId: 'nested-failure' })
         notify({ content: [{ content: imageResult, type: 'content' }], kind: 'read', rawInput: { code: 'await image(capture);' }, sessionUpdate: 'tool_call', status: 'completed', title: 'Capture result', toolCallId: 'image-result' })
+        notify({ content: [{ content: { text: '0 errors found.', type: 'text' }, type: 'content' }], kind: 'read', rawInput: { path: 'notes.md' }, sessionUpdate: 'tool_call', status: 'completed', title: 'Read notes', toolCallId: 'neutral-result' })
         socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {
           sessionId: message.params.sessionId,
           update: { content: { text: 'Connected through the test ACP peer.', type: 'text' }, sessionUpdate: 'agent_message_chunk' },
@@ -93,29 +96,42 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     await page.getByRole('textbox', { name: 'Message the agent' }).fill('Check the connection')
     await page.getByRole('button', { exact: true, name: 'Send' }).click()
     await page.getByText('Connected through the test ACP peer.', { exact: true }).waitFor()
-    const tool = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: 'execute' }) })
-    await tool.locator('summary').first().click()
-    await tool.getByText('Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', { exact: true }).waitFor()
-    assert.match(await tool.locator('summary').first().textContent(), /complete/, 'A completed wrapper must keep its own status when a nested tool fails')
-    assert.equal(JSON.parse(await tool.locator('pre').first().textContent()).code, 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });', 'The complete tool input must remain inspectable')
-    await tool.locator('summary').filter({ hasText: 'Raw output' }).click()
-    assert.match(await tool.textContent(), /"status": "error"/, 'The nested error metadata must remain inspectable')
-    const capture = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: 'Capture result' }) })
-    await capture.locator('summary').first().click()
-    const image = capture.getByRole('img', { name: 'Tool result' })
+    const activity = page.locator('[data-agent-activity]')
+    await activity.locator('summary').first().waitFor()
+    assert.match(await activity.locator('summary').first().textContent(), /4 activities/, 'Adjacent tool calls must share a compact activity summary')
+    assert.match(await activity.locator('summary').first().textContent(), /2 issues/, 'Returned errors must remain visible when the activity is collapsed')
+    await activity.locator('.agent-activity-errors').getByText('Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', { exact: true }).waitFor()
+    const image = activity.getByRole('img', { exact: true, name: 'Screenshot 1' })
     await image.scrollIntoViewIfNeeded()
     await image.evaluate(element => element.decode())
     assert.equal(await image.evaluate(element => element.complete && element.naturalWidth > 0), true, 'ACP tool images must render as images')
+    await activity.getByRole('button', { exact: true, name: 'View screenshot 1' }).click()
+    await page.getByRole('dialog', { exact: true, name: 'Screenshot 1' }).waitFor()
+    await page.keyboard.press('Escape')
+    await page.getByRole('dialog').waitFor({ state: 'hidden' })
+    await activity.locator('summary').first().click()
+    const tool = activity.locator('[data-tool-id="nested-failure"]')
+    assert.equal(await tool.getAttribute('data-tool-status'), 'error')
+    assert.equal(await activity.locator('[data-tool-id="code-failure"]').getAttribute('data-tool-status'), 'error')
+    assert.equal(await activity.locator('[data-tool-id="neutral-result"]').getAttribute('data-tool-status'), 'finished', 'Result text must not be parsed to infer an error')
+    await tool.locator('summary').first().click()
+    await tool.locator('summary').filter({ hasText: 'Script' }).click()
+    assert.equal(await tool.locator('[data-tool-script]').textContent(), 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });', 'Scripts must remain inspectable without JSON string escaping')
+    await tool.locator('summary').filter({ hasText: 'Protocol details' }).click()
+    await tool.getByText('ACP status: completed', { exact: true }).waitFor()
+    assert.match(await tool.textContent(), /"status": "error"/, 'The original nested error metadata must remain inspectable')
     assert.ok(clients.length > 0, 'The agent must discover the browser tool through HTTP MCP')
     assert.ok(relay.registrations.includes('Bearer connection-token'), 'The MCP endpoint must use a live account token')
     assert.equal(connections, opened, 'Tab switches must retain the ACP socket')
     assert.equal(messages.filter(message => message.method === 'session/new').length, sessions, 'Tab switches must retain the ACP session')
     assert.ok(messages.find(message => message.method === 'session/prompt').params.prompt.some(part => part.text?.includes('api.help()')))
     if (process.env.AUV_AGENT_CONNECTED_SCREENSHOT) {
-      await capture.locator('summary').first().click()
-      await tool.locator('summary').first().scrollIntoViewIfNeeded()
+      await activity.locator('summary').first().click()
+      await activity.locator('summary').first().scrollIntoViewIfNeeded()
       await page.screenshot({ animations: 'disabled', path: process.env.AUV_AGENT_CONNECTED_SCREENSHOT })
     }
+    await page.setViewportSize({ height: 720, width: 1280 })
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Agent activity must fit the workbench at 1280 by 720')
     await page.getByRole('button', { exact: true, name: 'Start a new agent session' }).click()
     await page.getByText('Connected through the test ACP peer.', { exact: true }).waitFor({ state: 'hidden' })
     await page.getByRole('textbox', { name: 'Message the agent' }).fill('Check the new session')
@@ -136,7 +152,8 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     return { connectionPreserved: true, deviceDirectory: true, inspectableToolResults: true, liveAccessToken: true, newSessionBriefing: true, unsupportedAgentBlocked: true }
   }
   catch (error) {
-    console.error('Agent UI state:', await page.locator('body').textContent())
+    // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- Only rendered text belongs in failure logs; closed protocol details can contain image data.
+    console.error('Agent UI state:', await page.locator('body').innerText())
     console.error('ACP methods:', messages.map(message => message.method ?? 'response'))
     throw error
   }
