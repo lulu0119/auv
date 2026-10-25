@@ -6,12 +6,20 @@ The Playground supplies one `codemode({ code, timeoutMs })` MCP tool to an ACP a
 The browser executes each call against its selected AUV Device or mock desktop.
 The agent receives explicit output and execution status through the tool response.
 
-An app-owned proxy starts the configured ACP executable on the agent device.
-It supplies a loopback HTTP MCP server to new ACP sessions.
-The underlying agent must advertise HTTP MCP support.
-The browser and proxy negotiate `_meta.auv.codemode = 1` during initialization.
-Tool calls use `_auv/codemode` reverse requests on the ACP connection.
-Connections require this extension before the UI starts a session.
+The browser declares a native ACP MCP server in `session/new.mcpServers`.
+Agents advertise `agentCapabilities.mcpCapabilities.acp` before session creation.
+Tool discovery and execution use request-scoped `mcp/message` operations.
+Cancellation uses `$/cancel_request`; inner MCP errors retain their MCP meaning.
+The native binding uses MCP 2026-07-28 and is experimental.
+
+HTTP-only agents use an adapter on the agent device.
+It converts native server declarations to authenticated loopback HTTP addresses.
+Current OpenCode clients also need a standalone HTTP initialization handshake.
+The adapter terminates that handshake and supplies native metadata per operation.
+It contains no Playground-specific tools or execution policy.
+Native-capable agents work directly without this adapter.
+The former `_meta.auv.codemode` and `_auv/codemode` methods are removed.
+See the [ACP migration and diagnosis](2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md).
 
 Each call uses a temporary Worker with a fresh QuickJS/WASM context.
 The guest has a 64 MiB memory limit and no filesystem, network, or browser globals.
@@ -43,7 +51,7 @@ The ACP consumer accepts `{ url, label, cwd }` without an Exterior dependency.
 The adapter supplies the agent device's `workingDirectory` as `cwd`.
 The agent device and selected AUV Device are independent.
 
-The adapter uses `@exterior/client`, `@exterior/client/react`, and `@exterior/contract`.
+The adapter uses `@exterioragentprotocol/sdk`.
 `VITE_EXTERIOR_URL` selects the relay origin; the default is `http://127.0.0.1:8787`.
 The callback is under the `/playground/` application base path.
 See the [Exterior connection contract](2026-10-20-exterior-adapter-research.md)

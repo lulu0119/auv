@@ -152,8 +152,12 @@ export function mockRunner(desktop: MockDesktop): Transport {
     }
     return region && { height: region.height * bounds.height, width: region.width * bounds.width, x: bounds.x + region.x * bounds.width, y: bounds.y + region.y * bounds.height }
   }
-  const matchesOf = (bounds: Rect, area: Rect | undefined, query: string) =>
-    desktop.text(bounds, area).filter(match => match.text.toLowerCase().includes(query.toLowerCase())).map(textMatch)
+  const matchesOf = (bounds: Rect, area: Rect | undefined, query: string) => {
+    // Match the shared OCR contract: an empty normalized query has no hits.
+    // See auv-driver-common/src/vision/ocr.rs, OcrResult::find_contains.
+    const normalized = query.trim().toLowerCase()
+    return normalized ? desktop.text(bounds, area).filter(match => match.text.toLowerCase().includes(normalized)).map(textMatch) : []
+  }
 
   return createMockTransport((router: MockRouter) => {
     const { service } = router
@@ -190,6 +194,8 @@ export function mockRunner(desktop: MockDesktop): Transport {
       captureRegion: async (request) => {
         await delay(LATENCY_MS.capture)
         const region = request.region ?? { height: 0, width: 0, x: 0, y: 0 }
+        if (![region.x, region.y, region.width, region.height].every(Number.isFinite) || region.width <= 0 || region.height <= 0)
+          throw new AuvRpcError(INVALID_ARGUMENT, 'capture region requires finite coordinates and positive width and height')
         const target = request.selector ? display(request.selector) : desktop.displayAt(region)
         return { capture: capture(region, scaleOf(request.resolution, region), undefined), display: displayMessage(target) }
       },
@@ -400,6 +406,14 @@ function delivered(path: InputDeliveryPath) {
   return { attempts: [{ path, succeeded: true }], selectedPath: path }
 }
 
+function displayMessage(display: DisplayInfo) {
+  return { displayId: display.id, frame: display.frame, name: display.name, primary: display.primary, scaleFactor: display.scale }
+}
+
+function recognized(regions: TextMatch[]) {
+  return { regions: regions.map(textMatch), text: regions.map(region => region.text).join('\n') }
+}
+
 /** The scene models Todo submission, not a native keyboard or text editor. */
 function requireMockKey(keys: readonly string[]): string {
   if (keys.length === 0)
@@ -409,14 +423,6 @@ function requireMockKey(keys: readonly string[]): string {
   if (keys.length !== 1 || !/^(?:return|enter)$/i.test(keys[0]!))
     throw new AuvRpcError(UNIMPLEMENTED, 'the mock desktop supports only Return or Enter; other keys and shortcuts are not implemented')
   return keys[0]!
-}
-
-function displayMessage(display: DisplayInfo) {
-  return { displayId: display.id, frame: display.frame, name: display.name, primary: display.primary, scaleFactor: display.scale }
-}
-
-function recognized(regions: TextMatch[]) {
-  return { regions: regions.map(textMatch), text: regions.map(region => region.text).join('\n') }
 }
 
 function textMatch(match: TextMatch) {

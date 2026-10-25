@@ -14,6 +14,7 @@ export interface CompileRequest {
   /** Codemode accepts return statements in the async script body. */
   allowReturn?: boolean
   cellId: number
+  recordOnly?: boolean
   source: string
   /** Editor line where `source` starts. */
   startLine: number
@@ -99,8 +100,8 @@ export type ResumeMode = 'continue' | 'step'
 
 export type RunOutcome
   = { codemode?: CodeModeState } & ({ line?: number, message: string, stack?: string, status: 'error' }
-    | { status: 'ok', value: WireValue }
-    | { status: 'stopped' })
+    | { reason?: 'canceled' | 'timeout', status: 'stopped' }
+    | { status: 'ok', value: WireValue })
 
 export interface RunRequest {
   binds: BindSite[]

@@ -19,7 +19,7 @@ export function sandboxBriefing(): string {
     `Core SDK signatures:\n${createApiHelp(catalog).help().starter.map(entry => entry.signature).join('\n')}`,
     'Example: const win = await auv.windows.resolve({ appName: "Counter" }); const found = await win.findText("Increment"); text(found.matches);',
     'Each tool call has fresh variables. `store(key, value)` and `load(key)` retain small JSON values only after successful calls. Save IDs, not SDK handles or pixels. Reconstruct a window with `await auv.windows.get(id)`.',
-    'SDK calls support JSON arguments. Callbacks, SDK async iterators and editor-only area/draw/focus helpers are not available in codemode yet.',
+    'SDK calls support data arguments, including bigint IDs. Follow the exact types and examples: protobuf selectors and actions use nested case/value fields. Unknown fields can be omitted by SDK encoding. Callbacks, SDK async iterators and editor-only area/draw/focus helpers are not available in codemode yet.',
     'Intermediate SDK responses remain in the timeline. Emit only the evidence you need. Await every device call. A failed or canceled script does not undo delivered inputs.',
     'Successful execution and input delivery do not prove task success: read the relevant app state or show evidence to verify the requested result.',
     'Wait for a user task, then call codemode and iterate on its result. The human can inspect or stop your execution.',

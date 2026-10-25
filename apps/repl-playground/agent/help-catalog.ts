@@ -20,6 +20,9 @@ const unavailable: Record<string, string> = {
 }
 
 const examples: Record<string, string[]> = {
+  'auv.displays.capture': ['const displays = await auv.displays.list(); const display = displays.at(-1); const selector = { selector: { case: "display", value: { displayId: display.displayId } } }; await image((await auv.displays.capture(selector)).capture)'],
+  'auv.displays.findText': ['const displays = await auv.displays.list(); text(await auv.displays.findText({ selector: { case: "display", value: { displayId: displays.at(-1).displayId } } }, "Counter"))'],
+  'auv.input.keyboard': ['const win = await auv.windows.resolve({ appName: "Todos" }); await win.click({ x: 100, y: 74 }); text(await auv.input.keyboard({ target: { recipient: { case: "window", value: { ref: { windowId: win.id } } } }, inputs: [{ action: { case: "typeText", value: { text: "Buy milk" } } }, { action: { case: "press", value: { options: { keys: ["Return"] } } } }] }))'],
   'auv.recognizeText': ['const win = await auv.windows.resolve({ appName: "Counter" }); const shot = await win.capture(); text(await auv.recognizeText(shot.capture))'],
   'auv.windows.from': ['const win = auv.windows.from(load("windowId")); text(await win.findText("Count"))'],
   'auv.windows.get': ['const win = await auv.windows.get(load("windowId")); text(win.window)'],

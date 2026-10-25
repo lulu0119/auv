@@ -105,7 +105,6 @@ function LiveConnection({ connection, onInfantDeath, onRetry, opening }: {
     sandboxBriefing,
   )))
   const runtime = useAcpRuntime({
-    clientCapabilities: { _meta: { auv: { codemode: 1 } } },
     clientInfo: { name: 'auv-playground', version },
     connection: { adapter, type: 'adapter' },
     // TODO(agent-directory): an explicit directory picker is deferred until
@@ -198,7 +197,7 @@ function SessionBody({ codemode, onInfantDeath, onRetry, opening, supportsCodemo
   if (status !== 'ready')
     return <Empty>{status === 'connecting' ? 'Opening the agent.' : status}</Empty>
   if (!supportsCodemode) {
-    return <Empty>This connection does not provide code execution. Configure the Playground agent proxy on the agent device, then reconnect.</Empty>
+    return <Empty>This agent does not support MCP over ACP. Use an agent with ACP MCP support, or configure the HTTP MCP adapter on the agent device, then reconnect.</Empty>
   }
   if (failure)
     return <Empty><span className="text-bad">{failure}</span></Empty>

@@ -9,6 +9,7 @@ import catalog from 'virtual:auv-codemode-help'
 import { newQuickJSWASMModuleFromVariant } from 'quickjs-emscripten-core'
 
 import { createApiHelp } from '../script-api/codemode-help'
+import { toWire } from './wire-value'
 
 const apiHelp = createApiHelp(catalog)
 
@@ -33,18 +34,37 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
   let imageChars = 0
   let closed = false
   let failure: ((error: Error) => void) | undefined
-  const deferreds: Array<ReturnType<typeof vm.newPromise>> = []
+  const deferreds = new Set<ReturnType<typeof vm.newPromise>>()
   const bindWindow = (globals.auv as Partial<RunnerClient> | undefined)?.windows?.from
   // NOTICE(codemode-callbacks): callbacks/iterators need explicit VM
   // marshalling. Reject them until an approved streaming/callback slice.
   const validate = vm.unwrapResult(vm.evalCode(`value => JSON.stringify(value, (key, item) => {
     if (typeof item === 'function') throw new TypeError('SDK callbacks are not supported in codemode yet');
+    if (typeof item === 'bigint') return String(item);
     return item;
   })`))
+  const isArray = vm.unwrapResult(vm.evalCode('Array.isArray'))
   const fromVM = (handle: QuickJSHandle): unknown => {
     const checked = vm.unwrapResult(vm.callFunction(validate, vm.undefined, handle))
     checked.dispose()
-    return vm.dump(handle)
+    const type = vm.typeof(handle)
+    if (type !== 'object' || vm.eq(handle, vm.null))
+      return vm.dump(handle)
+    const array = vm.unwrapResult(vm.callFunction(isArray, vm.undefined, handle)).consume(result => vm.eq(result, vm.true))
+    const value: Record<string, unknown> | unknown[] = array ? [] : {}
+    const keys = vm.unwrapResult(vm.getOwnPropertyNames(handle, { numbersAsStrings: true, onlyEnumerable: true, strings: true }))
+    try {
+      for (const key of keys) {
+        const name = vm.getString(key)
+        const child = vm.getProp(handle, key)
+        try {
+          Object.defineProperty(value, name, { configurable: true, enumerable: true, value: fromVM(child), writable: true })
+        }
+        finally { child.dispose() }
+      }
+      return value
+    }
+    finally { keys.dispose() }
   }
   const pump = () => {
     if (closed)
@@ -81,7 +101,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
         if (!asyncFunctions || value === bindWindow)
           return toVM(value(...args), asyncFunctions)
         const pending = vm.newPromise()
-        deferreds.push(pending)
+        deferreds.add(pending)
         void Promise.resolve().then(() => {
           if (closed || signal.aborted)
             throw new Error('Codemode canceled')
@@ -103,7 +123,13 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
           }
           pending.reject(handle)
           handle.dispose()
-        }).finally(pump)
+        }).finally(() => {
+          if (!closed) {
+            pending.dispose()
+            deferreds.delete(pending)
+            pump()
+          }
+        })
         return pending.handle
       })
     }
@@ -133,7 +159,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
     handle.dispose()
   }
   const text = (value: unknown) => {
-    const output = typeof value === 'string' ? value : JSON.stringify(value) ?? 'undefined'
+    const output = typeof value === 'string' ? value : JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? String(item) : item) ?? 'undefined'
     if (content.length >= 100 || outputChars + output.length > 16000)
       throw new Error('Codemode output exceeds 16000 characters or 100 items; filter results before output')
     outputChars += output.length
@@ -146,6 +172,13 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
   signal.addEventListener('abort', abort, { once: true })
   try {
     for (const [name, value] of Object.entries(globals)) install(name, value, name === 'auv' || name === 'image' || name === '__step')
+    // Inspection must summarize inside the VM, before a value crosses into
+    // the host. Keep this shared serializer self-contained for both realms.
+    vm.unwrapResult(vm.evalCode(`{
+      const inspect = (${toWire.toString()});
+      const bind = globalThis.__bind;
+      globalThis.__bind = (id, values) => bind(id, inspect(values));
+    }`)).dispose()
     install('api', apiHelp, false)
     // State lives in host JSON, so it cannot retain SDK function closures,
     // image bytes, or mutable references from an earlier VM.
@@ -192,7 +225,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
       })
       const value = vm.unwrapResult(result)
       try {
-        const returned = vm.dump(value)
+        const returned = fromVM(value)
         if (returned !== undefined)
           text(returned)
         return { codemode: { content, store }, status: 'ok', value: undefined }
@@ -211,6 +244,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
     signal.removeEventListener('abort', abort)
     for (const pending of deferreds) pending.dispose()
     validate.dispose()
+    isArray.dispose()
     vm.dispose()
   }
 }

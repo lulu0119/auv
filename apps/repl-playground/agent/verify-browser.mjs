@@ -31,7 +31,7 @@ async function verifyAgentConnection(browser, url) {
       messages.push(message)
       let result
       if (message.method === 'initialize') {
-        result = { agentCapabilities: supported ? { _meta: { auv: { codemode: 1 } } } : {}, protocolVersion: 1 }
+        result = { agentCapabilities: supported ? { mcpCapabilities: { acp: true } } : {}, protocolVersion: 1 }
       }
       else if (message.method === 'session/new') {
         result = { sessionId: `ui-${message.id}` }
@@ -43,8 +43,19 @@ async function verifyAgentConnection(browser, url) {
         } }))
         result = { stopReason: 'end_turn' }
       }
-      if (result)
+      if (result) {
         socket.send(JSON.stringify({ id: message.id, jsonrpc: '2.0', result }))
+        if (message.method === 'session/new') {
+          const declaration = message.params.mcpServers.find(server => server.type === 'acp')
+          assert.ok(declaration, 'A native agent must receive the ACP MCP declaration')
+          socket.send(JSON.stringify({ id: `catalog-${message.id}`, jsonrpc: '2.0', method: 'mcp/message', params: {
+            method: 'tools/list',
+            params: { _meta: { 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
+            requestId: `catalog-${message.id}`,
+            serverId: declaration.serverId,
+          } }))
+        }
+      }
     })
   })
   try {
@@ -80,6 +91,7 @@ async function verifyAgentConnection(browser, url) {
     await page.getByRole('textbox', { name: 'Message the agent' }).fill('Check the connection')
     await page.getByRole('button', { exact: true, name: 'Send' }).click()
     await page.getByText('Connected through the test ACP peer.', { exact: true }).waitFor()
+    assert.ok(messages.some(message => message.result?.result?.tools?.[0]?.name === 'codemode'), 'A native ACP agent must discover the browser MCP tool')
     assert.equal(connections, opened, 'Tab switches must retain the ACP socket')
     assert.equal(messages.filter(message => message.method === 'session/new').length, sessions, 'Tab switches must retain the ACP session')
     assert.ok(messages.find(message => message.method === 'session/prompt').params.prompt.some(part => part.text?.includes('api.help()')))
@@ -98,7 +110,7 @@ async function verifyAgentConnection(browser, url) {
     supported = false
     const newSessions = messages.filter(message => message.method === 'session/new').length
     await page.getByRole('button', { exact: true, name: 'Connect' }).click()
-    await page.getByText('This connection does not provide code execution.', { exact: false }).waitFor()
+    await page.getByText('This agent does not support MCP over ACP.', { exact: false }).waitFor()
     assert.equal(await page.getByRole('textbox', { name: 'Message the agent' }).count(), 0)
     assert.equal(messages.filter(message => message.method === 'session/new').length, newSessions)
     assert.deepEqual(errors, [])
@@ -176,7 +188,7 @@ async function verifyBrowser() {
       })
       const reader = stream.readable.getReader()
       const writer = stream.writable.getWriter()
-      await writer.write({ id: 1, jsonrpc: '2.0', method: 'initialize', params: { clientCapabilities: { _meta: { auv: { codemode: 1 } } }, protocolVersion: 1 } })
+      await writer.write({ id: 1, jsonrpc: '2.0', method: 'initialize', params: { clientCapabilities: {}, protocolVersion: 1 } })
       await reader.read()
       await writer.write({ id: 2, jsonrpc: '2.0', method: 'session/new', params: { cwd: '/', mcpServers: [] } })
       const message = (await reader.read()).value
@@ -190,6 +202,20 @@ async function verifyBrowser() {
       return message.result._meta.receivedServers[0]
     }, `ws://127.0.0.1:${webSocket.address().port}`)
     await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])) } }))
+    await page.evaluate(() => {
+      window.savedBackend = window.playgroundState().backend
+      return import('/playground/src/store.ts').then(({ usePlayground }) => usePlayground.setState({ backend: null }))
+    })
+    try {
+      const pure = await client.callTool({ arguments: { code: 'text(api.help().limits.memoryMiB); return 2;' }, name: 'codemode' })
+      assert.equal(pure.isError, false, `Pure code and API help must work before a device is ready: ${JSON.stringify(pure)}`)
+      const missing = await client.callTool({ arguments: { code: 'await auv.windows.list();' }, name: 'codemode' })
+      assert.equal(missing.isError, true)
+      assert.match(missing.content.at(-1).text, /needs a device/)
+    }
+    finally {
+      await page.evaluate(async () => (await import('/playground/src/store.ts')).usePlayground.setState({ backend: window.savedBackend }))
+    }
     assert.match((await client.listTools()).tools[0].description, /api\.help/)
     const discovery = await client.callTool({ arguments: { code: 'text(api.help()); text(api.describe({ path: api.search({ query: "WindowClient.findText" }).items[0].path }));' }, name: 'codemode' })
     assert.equal(discovery.isError, false, JSON.stringify(discovery))
@@ -197,6 +223,10 @@ async function verifyBrowser() {
     assert.match(help.signature, /query: string/)
     assert.match(help.types.FindWindowTextResponse.definition, /matches/)
     assert.equal((await page.evaluate(() => window.playgroundState().calls)).length, 0, 'Metadata help must not call the device')
+    const selectedDisplay = await client.callTool({ arguments: { code: 'const selector = { selector: { case: "display", value: { displayId: "2" } } }; text((await auv.displays.capture(selector)).display.displayId); text((await auv.displays.findText(selector, "Counter")).matches.length);' }, name: 'codemode' })
+    assert.equal(selectedDisplay.isError, false, JSON.stringify(selectedDisplay))
+    assert.ok(selectedDisplay.content.some(item => item.text === '2'), 'The SDK selector must reach display 2')
+    assert.ok(selectedDisplay.content.some(item => item.text === '1'), 'Counter must be found on display 2')
     const example = await client.callTool({ arguments: { code: help.examples[0] }, name: 'codemode' })
     assert.equal(example.isError, false, JSON.stringify(example))
     assert.ok(example.content.some(item => item.type === 'text' && item.text.includes('Increment')))
@@ -247,7 +277,7 @@ async function verifyBrowser() {
     assert.deepEqual(continued.frames, history.frames, 'A call without captures must retain the latest desktop image')
     assert.ok(continued.seq > history.seq, 'Timeline positions must continue across codemode calls')
     await page.getByRole('tab', { exact: true, name: 'Variables' }).click()
-    assert.match(await page.getByRole('tabpanel', { exact: true, name: 'Variables' }).innerText(), /Declared names show up here/, 'A fresh VM must not display variables from earlier scripts or the editor')
+    assert.match(await page.getByRole('tabpanel', { exact: true, name: 'Variables' }).textContent(), /Declared names show up here/, 'A fresh VM must not display variables from earlier scripts or the editor')
     await page.getByRole('tab', { name: /^Calls / }).click()
     const failed = await client.callTool({ arguments: { code: 'store("counterId", "bad"); text("before"); throw new Error("intentional");' }, name: 'codemode' })
     assert.equal(failed.isError, true)
@@ -267,17 +297,43 @@ async function verifyBrowser() {
     assert.match(appended[history.calls.length - 1].script.source, /for \(let i = 0; i < 3;/, 'Earlier calls must retain their original source')
     await page.locator(`[data-call-id="${history.calls.at(-1)}"] td`).first().click()
     await page.locator('summary').filter({ hasText: 'source' }).click()
-    assert.match(await page.locator('details pre').innerText(), /for \(let i = 0; i < 3;/, 'The inspector must show the selected call source')
+    assert.match(await page.locator('details pre').textContent(), /for \(let i = 0; i < 3;/, 'The inspector must show the selected call source')
     const canceled = client.callTool({ arguments: { code: 'text("waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('waiting')))
     await page.evaluate(() => window.codemodeHost.cancel())
     const canceledResult = await canceled
     assert.equal(canceledResult.isError, true)
     assert.ok(canceledResult.content.some(item => item.type === 'text' && item.text === 'waiting'), JSON.stringify(canceledResult))
+    const transportAbort = new AbortController()
+    const transportCanceled = client.callTool({ arguments: { code: 'text("transport waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' }, undefined, { signal: transportAbort.signal })
+    await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('transport waiting')))
+    transportAbort.abort()
+    await assert.rejects(transportCanceled)
+    await page.waitForFunction(() => window.playgroundState().run.status === 'stopped')
     const loop = await client.callTool({ arguments: { code: 'while (true) {}', timeoutMs: 300 }, name: 'codemode' })
     assert.equal(loop.isError, true)
+    assert.match(loop.content.at(-1).text, /timed out|interrupted/)
     const recovered = await client.callTool({ arguments: { code: 'return 7;' }, name: 'codemode' })
     assert.equal(recovered.isError, false)
+    const allocation = await client.callTool({ arguments: { code: 'const values = new Array(1000000).fill("x"); text(values.length);' }, name: 'codemode' })
+    assert.equal(allocation.isError, false, JSON.stringify(allocation))
+    assert.ok(allocation.content.some(item => item.text === '1000000'))
+    // TODO(codemode-trace-granularity): this performance reproduction remains
+    // red with complete statement history. Owner approval is required before
+    // switching codemode inspection to SDK/output boundaries.
+    if (process.env.AUV_CODEMODE_BENCHMARK) {
+      const busyStart = Date.now()
+      const busy = await client.callTool({ arguments: { code: 'let sum=0; for(let i=0;i<1000000;i++){ sum+=i; } text(sum);', timeoutMs: 10000 }, name: 'codemode' })
+      console.info('Million-iteration browser loop:', Date.now() - busyStart, 'ms')
+      assert.equal(busy.isError, false, JSON.stringify(busy))
+      assert.ok(busy.content.some(item => item.text === '499999500000'))
+    }
+    const malformed = await client.callTool({ arguments: { code: 'await auv.displays.captureRegion({ x: 0, y: 0, width: -10, height: -10 });' }, name: 'codemode' })
+    assert.equal(malformed.isError, true)
+    assert.match(malformed.content.at(-1).text, /positive/)
+    const empty = await client.callTool({ arguments: { code: 'const win = await auv.windows.get("w-counter"); text((await win.findText("")).matches.length); text((await win.findText(" ")).matches.length);' }, name: 'codemode' })
+    assert.equal(empty.isError, false)
+    assert.equal(empty.content.filter(item => item.text === '0').length, 2)
     const editorRun = await page.evaluate(async () => (await import('/playground/src/runtime/session.ts')).session.run({ mode: 'run', source: 'editorValue;', startLine: 1 }))
     assert.equal(editorRun.value, 99)
     assert.equal(errors.length, 0, errors.join('\n'))

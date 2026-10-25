@@ -28,16 +28,27 @@ async function connection(extraArgs = []) {
   lines.on('line', async (line) => {
     const message = JSON.parse(line)
     incoming.push(message)
-    if (message.method === '_auv/codemode') {
-      const { code, timeoutMs } = message.params
+    if (message.method === 'mcp/message') {
+      const { method, params } = message.params
+      if (method === 'tools/list') {
+        send({ id: message.id, jsonrpc: '2.0', result: { result: { tools: [{ inputSchema: { type: 'object' }, name: 'codemode' }] } } })
+        return
+      }
+      if (params.arguments?.code === 'mcp-error') {
+        send({ id: message.id, jsonrpc: '2.0', result: { error: { code: -32000, data: null, extension: { kept: true }, message: 'MCP failure' } } })
+        return
+      }
+      if (params.arguments?.code === 'wait')
+        return
+      const { code, timeoutMs = 30000 } = params.arguments
       const outcome = await runCodeMode({
-        ...compileCell(code, { allowReturn: true }),
+        ...compileCell(code, { allowReturn: true, recordOnly: true }),
         breakpoints: [],
         codemode: { store: {}, timeoutMs },
         executionId: 1,
         mode: 'run',
       }, { __bind: () => {}, __step: async () => {}, __stepSync: () => {} }, new AbortController().signal)
-      send({ id: message.id, jsonrpc: '2.0', result: { content: outcome.codemode.content, isError: outcome.status !== 'ok' } })
+      send({ id: message.id, jsonrpc: '2.0', result: { result: { content: outcome.codemode.content, isError: outcome.status !== 'ok' } } })
     }
     else if (!message.method && waiters.has(message.id)) {
       waiters.get(message.id)(message)
@@ -56,7 +67,7 @@ async function connection(extraArgs = []) {
     waiters.set(id, resolve)
     send({ id, jsonrpc: '2.0', method, params })
   })
-  return { incoming, request }
+  return { incoming, request, send }
 }
 
 describe('codemode ACP proxy', () => {
@@ -71,9 +82,9 @@ describe('codemode ACP proxy', () => {
 
   it('injects MCP per session and round-trips a real MCP code call over ACP', async () => {
     const peer = await connection()
-    const initialized = await peer.request('initialize', { clientCapabilities: { _meta: { auv: { codemode: 1 } } }, protocolVersion: 1 })
-    expect(initialized.result.agentCapabilities._meta.auv.codemode).toBe(1)
-    const created = await peer.request('session/new', { cwd: '/', mcpServers: [] })
+    const initialized = await peer.request('initialize', { clientCapabilities: {}, protocolVersion: 1 })
+    expect(initialized.result.agentCapabilities.mcpCapabilities.acp).toBe(true)
+    const created = await peer.request('session/new', { cwd: '/', mcpServers: [{ name: 'provider', serverId: 'server-one', type: 'acp' }] })
     const server = created.result._meta.receivedServers[0]
     expect(server.type).toBe('http')
     expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:/)
@@ -83,11 +94,24 @@ describe('codemode ACP proxy', () => {
     expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['codemode'])
     const result = await client.callTool({ arguments: { code: 'const values = [1, 2, 3]; return values.reduce((a, b) => a + b, 0);' }, name: 'codemode' })
     expect(result).toMatchObject({ content: [{ text: '6', type: 'text' }], isError: false })
-    const reverse = peer.incoming.find(message => message.method === '_auv/codemode')
-    expect(reverse.params.sessionId).toBe(created.result.sessionId)
-    const other = await peer.request('session/new', { cwd: '/', mcpServers: [] })
+    const reverse = peer.incoming.find(message => message.method === 'mcp/message')
+    expect(reverse.params).toMatchObject({ method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } }, serverId: 'server-one' })
+    const other = await peer.request('session/new', { cwd: '/', mcpServers: [{ name: 'provider', serverId: 'server-two', type: 'acp' }] })
     expect(other.result._meta.receivedServers[0].url).not.toBe(server.url)
     expect((await fetch(server.url, { method: 'POST' })).status).toBe(404)
+    const error = await fetch(server.url, { body: JSON.stringify({ id: 'external-id', jsonrpc: '2.0', method: 'tools/call', params: { arguments: { code: 'mcp-error' }, name: 'codemode' } }), headers: { ...Object.fromEntries(server.headers.map(header => [header.name, header.value])), 'Content-Type': 'application/json' }, method: 'POST' })
+    expect(await error.json()).toEqual({ error: { code: -32000, data: null, extension: { kept: true }, message: 'MCP failure' }, id: 'external-id', jsonrpc: '2.0' })
+    const abort = new AbortController()
+    const waiting = client.callTool({ arguments: { code: 'wait' }, name: 'codemode' }, undefined, { signal: abort.signal })
+    await expect.poll(() => peer.incoming.some(message => message.params?.params?.arguments?.code === 'wait')).toBe(true)
+    const operation = peer.incoming.find(message => message.params?.params?.arguments?.code === 'wait')
+    abort.abort()
+    await expect(waiting).rejects.toThrow()
+    await expect.poll(() => peer.incoming.some(message => message.method === '$/cancel_request' && message.params.requestId === operation.id)).toBe(true)
+    peer.send({ id: operation.id, jsonrpc: '2.0', result: { result: { content: [], isError: true } } })
+    await peer.request('session/new', { cwd: '/', mcpServers: [] })
+    expect(peer.incoming.some(message => message.method === 'test/unexpected-response')).toBe(false)
+    expect((await client.listTools()).tools[0].name).toBe('codemode')
   })
 
   it('keeps unwrapped clients unchanged and rejects agents without HTTP MCP support', async () => {
@@ -95,8 +119,15 @@ describe('codemode ACP proxy', () => {
     await peer.request('initialize', { clientCapabilities: {}, protocolVersion: 1 })
     const plain = await peer.request('session/new', { cwd: '/', mcpServers: [] })
     expect(plain.result._meta.receivedServers).toEqual([])
-    await peer.request('initialize', { clientCapabilities: { _meta: { auv: { codemode: 1 } } }, protocolVersion: 1 })
-    const unsupported = await peer.request('session/new', { cwd: '/', mcpServers: [] })
+    const unsupported = await peer.request('session/new', { cwd: '/', mcpServers: [{ name: 'provider', serverId: 'one', type: 'acp' }] })
     expect(unsupported.error.message).toContain('HTTP MCP')
+  })
+
+  it('leaves native ACP MCP declarations unchanged', async () => {
+    const peer = await connection(['--native'])
+    await peer.request('initialize', { protocolVersion: 1 })
+    const declarations = [{ name: 'native', serverId: 'native-one', type: 'acp' }]
+    const created = await peer.request('session/new', { cwd: '/', mcpServers: declarations })
+    expect(created.result._meta.receivedServers).toEqual(declarations)
   })
 })

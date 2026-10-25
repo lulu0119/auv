@@ -45,7 +45,7 @@ controlled desktop.
   as a device, so scripts, the timeline and replay behave the same on it.
 - **Agent / Script tabs**: share the center panel. Sign in with Exterior and
   connect a codemode agent. Tab switches retain the connection and editor.
-  With the playground agent proxy, the agent calls `codemode` to execute code
+  Through MCP over ACP, the agent calls `codemode` to execute code
   against the selected Device or mock desktop. Explicit output returns to the
   agent; SDK calls appear in the timeline. Connections require codemode.
   A new connection starts a fresh agent process; disconnect ends it.
@@ -244,13 +244,21 @@ by name in cells, e.g. `function toolbar(win: Area): Area`.
 ## Agent codemode
 
 The playground supplies its own code tool to an ACP agent. Pi is not required.
-An agent-side proxy exposes one HTTP MCP tool and forwards execution requests
-over the existing ACP connection. The browser requires no public listener.
+The browser declares an ACP MCP server in `session/new.mcpServers`.
+The agent calls `tools/list` and `tools/call` through standard `mcp/message` requests.
+The browser requires no public listener.
+Native agents advertise `agentCapabilities.mcpCapabilities.acp` and need no proxy.
+MCP over ACP is currently an experimental protocol.
+
+For an HTTP-only agent, `agent/proxy.mjs` converts that declaration to loopback HTTP.
+Tool discovery and execution still use MCP over ACP on the browser connection.
+The adapter contains no Playground tool definition or execution policy.
+It supports the standalone HTTP initialization used by current OpenCode clients.
 
 On the agent device, install this checkout's dependencies.
 The device also needs an Exterior client connected to the same relay.
 Use the [desktop app or CLI daemon](https://github.com/lulu0119/exterior/blob/2205c5c9267a8e0ece3e8cee31cbc073bccabced/docs/manual.md).
-Configure an Exterior custom agent slot with an absolute proxy path:
+For an HTTP-only agent, configure a custom slot with an absolute adapter path:
 
 ```sh
 exterior agent-config create --name auv --command 'node "<absolute-checkout>/apps/repl-playground/agent/proxy.mjs" -- <ACP executable> <arguments>'
@@ -258,6 +266,7 @@ exterior agent-config create --name auv --command 'node "<absolute-checkout>/app
 
 Replace the placeholders with the actual paths and command.
 The underlying agent must advertise HTTP MCP support.
+Skip this adapter for agents that already advertise native ACP MCP support.
 Sign in and start the Exterior daemon against the same relay:
 
 ```sh
@@ -320,9 +329,9 @@ pnpm -F @auv-js/repl-playground agent:proxy -- <ACP executable> <arguments>
 ```
 
 In the Agent tab, select that slot. **Code execution connected** appears after
-the connection negotiates codemode. The agent can then execute code and read
+the agent advertises ACP MCP support. The agent can then execute code and read
 its output directly.
-Connections without the codemode extension show a setup message and cannot
+Connections without ACP MCP support show a setup message and cannot
 start a chat.
 
 Exterior is a concrete connection adapter in `src/features/agent/exterior.ts`.
@@ -331,7 +340,7 @@ The adapter uses `session.listDevices()` and `session.openConnection()`.
 The SDK obtains live tokens and shares concurrent refreshes for these calls.
 It converts a ticket into `{ url, label, cwd }` for the ACP session.
 The `cwd` comes from the agent device's `workingDirectory`.
-The ACP client, proxy, execution worker, and API help remain Playground-owned.
+The ACP client, HTTP adapter, execution worker, and API help remain Playground-owned.
 The agent device and the selected AUV device can be different computers.
 
 The tool description and the first prompt explain the help interface. Help is
@@ -422,7 +431,7 @@ store (zustand) ─▶ canvas, timeline, inspector, editor decorations
   credential, forwards them to the backend's transport and records them.
 - Codemode uses a temporary worker and an isolated QuickJS VM. It shares the
   compiler, SDK bridge, recording backend and timeline with the editor.
-  `agent/proxy.mjs` adapts standard MCP calls to the browser's ACP extension.
+  `agent/proxy.mjs` adapts HTTP-only agents to the browser's ACP MCP server.
 - `runtime/rpc-resources.ts` turns recorded SDK messages into host-side
   resources (frames, text, receipts, windows, displays) by protobuf type.
 - `src/components` holds store-agnostic UI building blocks (icon buttons, tab

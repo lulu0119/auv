@@ -169,8 +169,13 @@ class ExecSession {
     const cancel = () => this.stop()
     options.signal?.addEventListener('abort', cancel, { once: true })
     let timer: ReturnType<typeof setTimeout> | undefined
-    if (options.codemode)
-      timer = setTimeout(cancel, options.codemode.timeoutMs)
+    let timedOut = false
+    if (options.codemode) {
+      timer = setTimeout(() => {
+        timedOut = true
+        cancel()
+      }, options.codemode.timeoutMs)
+    }
     const recorder = !options.replay && live ? new RecordingBackend(live) : undefined
     this.#runBackend = options.replay ? new ReplayBackend(this.#recording!) : recorder ?? live
     this.#lineHits = new Map()
@@ -179,7 +184,7 @@ class ExecSession {
     actions.beginRun(options.replay ? 'replay' : 'live', script, options.codemode !== undefined)
     this.#seq = usePlayground.getState().seqAt.length
     try {
-      const compiled = await language.compile({ allowReturn: options.codemode !== undefined, cellId: script.id, source: options.source, startLine: options.startLine })
+      const compiled = await language.compile({ allowReturn: options.codemode !== undefined, cellId: script.id, recordOnly: options.codemode !== undefined, source: options.source, startLine: options.startLine })
       if (!compiled.ok) {
         actions.patchRun({ endedAt: Date.now(), errorLine: compiled.line, errorMessage: compiled.message, status: 'error' })
         return { line: compiled.line, message: compiled.message, status: 'error' }
@@ -205,7 +210,7 @@ class ExecSession {
       })
       const outcome = options.codemode
         ? await Promise.race([executing, new Promise<RunOutcome>((resolve) => {
-            const stopped = () => resolve({ codemode: { content: [...this.#codeOutput], store: options.codemode!.store }, status: 'stopped' })
+            const stopped = () => resolve({ codemode: { content: [...this.#codeOutput], store: options.codemode!.store }, reason: timedOut ? 'timeout' : 'canceled', status: 'stopped' })
             if (abort.signal.aborted)
               stopped()
             else abort.signal.addEventListener('abort', stopped, { once: true })

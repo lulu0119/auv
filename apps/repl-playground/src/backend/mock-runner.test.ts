@@ -22,6 +22,16 @@ async function mock() {
 }
 
 describe('mock Runner', () => {
+  it('rejects negative capture dimensions before rendering a mock image', async () => {
+    const { connection, runner } = await mock()
+    try {
+      // ROOT CAUSE: render() clamped invalid dimensions to a 1-pixel canvas,
+      // while capture metadata still reported the negative dimensions.
+      await expect(runner.displays.captureRegion({ height: -10, width: -10, x: 0, y: 0 })).rejects.toMatchObject({ rpcCode: 3 })
+    }
+    finally { await connection.close() }
+  })
+
   it('clicks a window at a window-local point, and the scene reacts', async () => {
     const { connection, desktop, runner } = await mock()
     const counter = await runner.windows.resolve({ application: { case: 'applicationId', value: 'dev.auv.mock.counter' } })

@@ -6,9 +6,11 @@ import { createInterface } from 'node:readline'
 // connect a real MCP client without credentials or an LLM service.
 createInterface({ input: process.stdin }).on('line', (line) => {
   const message = JSON.parse(line)
+  if (!message.method && 'id' in message)
+    process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'test/unexpected-response', params: message })}\n`)
   if (message.method === 'initialize') {
     process.stdout.write(`${JSON.stringify({ id: message.id, jsonrpc: '2.0', result: {
-      agentCapabilities: { mcpCapabilities: { http: !process.argv.includes('--no-http') } },
+      agentCapabilities: { mcpCapabilities: { acp: process.argv.includes('--native'), http: !process.argv.includes('--no-http') } },
       protocolVersion: 1,
     } })}\n`)
   }

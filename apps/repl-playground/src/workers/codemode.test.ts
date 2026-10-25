@@ -6,12 +6,42 @@ import { compileCell } from '../stepper/compile'
 import { runCodeMode } from './codemode'
 
 function request(source: string, store: Record<string, unknown> = {}, timeoutMs = 1000): RunRequest {
-  return { ...compileCell(source, { allowReturn: true }), breakpoints: [], codemode: { store, timeoutMs }, executionId: 1, mode: 'run' }
+  return { ...compileCell(source, { allowReturn: true, recordOnly: true }), breakpoints: [], codemode: { store, timeoutMs }, executionId: 1, mode: 'run' }
 }
 
 const hooks = { __bind: () => {}, __step: async () => {}, __stepSync: () => {} }
 
 describe('isolated codemode', () => {
+  // ROOT CAUSE: binding inspection copied the entire guest value before the
+  // worker could summarize it. Large-array dumps triggered a QuickJS teardown
+  // assertion. Bound inspection inside the guest before crossing that seam.
+  it('inspects large local arrays without exhausting the VM or leaking handles', async () => {
+    const bindings: unknown[] = []
+    const outcome = await runCodeMode(request('const values = new Array(300000).fill("x"); text(values.length);', {}, 5000), {
+      ...hooks,
+      __bind: (_id: number, values: unknown) => { bindings.push(values) },
+    }, new AbortController().signal)
+    expect(outcome).toMatchObject({ codemode: { content: [{ text: '300000', type: 'text' }] }, status: 'ok' })
+    expect(JSON.stringify(bindings).length).toBeLessThan(10000)
+  })
+
+  it('passes SDK bigint IDs without turning them into JSON strings', async () => {
+    const calls: unknown[] = []
+    const outcome = await runCodeMode(request('const result = await auv.mouse({ mouse: 9007199254740993n }); text(result); return result;'), {
+      ...hooks,
+      auv: { mouse: async (value: unknown) => {
+        calls.push(value)
+        return value
+      } },
+    }, new AbortController().signal)
+    expect(outcome.status).toBe('ok')
+    expect(calls).toEqual([{ mouse: 9007199254740993n }])
+    expect(outcome.codemode?.content).toEqual([
+      { text: '{"mouse":"9007199254740993"}', type: 'text' },
+      { text: '{"mouse":"9007199254740993"}', type: 'text' },
+    ])
+  })
+
   // A generic async bridge turned the SDK's synchronous windows.from()
   // into a Promise, so the next window operation could not be called.
   it('preserves synchronous window binding while its device methods remain asynchronous', async () => {

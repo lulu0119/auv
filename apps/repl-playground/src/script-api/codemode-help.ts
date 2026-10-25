@@ -21,7 +21,7 @@ export interface ApiType {
 
 export const codeModeRules = [
   'Help describes the SDK contract, not verified support on every device. Platform calls can return UNIMPLEMENTED.',
-  'Arguments must be JSON data. Callbacks, AbortSignal, generators, and async iterators cannot cross the VM. The host cancels the whole execution.',
+  'Arguments must be data; SDK bigint IDs retain precision. Callbacks, AbortSignal, generators, and async iterators cannot cross the VM. The host cancels the whole execution.',
   'A plain { x, y } is window-local on WindowClient and screen space on auv.input. A text match clicks at the center of its screen bounds.',
   'Captures contain references. Use await image(capture) for PNG/JPEG output, bounded to 1024 by 1024. Do not fetch or store full pixels.',
   'Each call has fresh variables. store/load retains small JSON values only after success. Save window IDs and rebind with auv.windows.from(id).',

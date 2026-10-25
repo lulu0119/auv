@@ -13,6 +13,7 @@ export const codeModeSdk = {
   inset: sdk.inset,
   intersect: sdk.intersect,
   leftOf: sdk.leftOf,
+  MouseButton: sdk.MouseButton,
   offset: sdk.offset,
   Position: sdk.Position,
   region: sdk.region,

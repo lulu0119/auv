@@ -1,10 +1,24 @@
-import type { AnyMessage, Stream } from '@agentclientprotocol/sdk'
+import type { AnyMessage, MessageMcpRequest, MessageMcpResponse, Stream } from '@agentclientprotocol/sdk'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
 import { session } from '../../runtime/session'
 import { applyScriptToEditor } from './editor-bridge'
 
 interface CodeCall { code: string, sessionId: string, timeoutMs: number }
+
+const tool = {
+  description: 'Execute TypeScript in the connected AUV Playground. Start with text(api.help()). Find SDK methods with text(api.search({query:"window text"})); read signatures, types and examples with text(api.describe({path:"WindowClient.findText"})). Use auv for the selected device, sdk for constants and geometry, text(value) or return for output, await image(capture) for bounded screenshots, and store/load for small JSON state. Each call has fresh variables. Delivered inputs are not rolled back on failure. SDK callbacks and async iterators are not supported yet.',
+  inputSchema: {
+    additionalProperties: false,
+    properties: {
+      code: { description: 'Raw TypeScript, with top-level await and return.', maxLength: 100000, minLength: 1, type: 'string' },
+      timeoutMs: { default: 30000, maximum: 120000, minimum: 1, type: 'integer' },
+    },
+    required: ['code'],
+    type: 'object',
+  },
+  name: 'codemode',
+}
 
 /** Owns one ACP session's JSON state and the currently executing tool call. */
 export class CodeModeHost {
@@ -22,6 +36,8 @@ export class CodeModeHost {
     const call = params as Partial<CodeCall> | undefined
     if (!this.#sessionId || call?.sessionId !== this.#sessionId)
       return error('This ACP session is not active in the playground.')
+    // NOTICE(codemode-serialization): calls share one mutable desktop. Parallel
+    // execution needs an owner-approved ordering contract for delivered input.
     if (this.#active || session.running)
       return error('Another playground execution is running.')
     if (typeof call.code !== 'string' || !call.code.trim() || call.code.length > 100000
@@ -53,7 +69,9 @@ export class CodeModeHost {
           ? 'Script completed. This confirms execution only; verify the requested external state separately.'
           : outcome.status === 'error'
             ? `Script failed${outcome.line === undefined ? '' : ` at line ${outcome.line}`}: ${outcome.message}`
-            : 'Script stopped or timed out. Delivered inputs are not undone.',
+            : outcome.status === 'stopped' && outcome.reason === 'timeout'
+              ? `Script timed out after ${call.timeoutMs} ms. Delivered inputs are not undone.`
+              : 'Script canceled. Delivered inputs are not undone.',
         type: 'text',
       })
       return { content, isError: !succeeded }
@@ -75,15 +93,36 @@ export class CodeModeHost {
 }
 
 /**
- * Filters app-owned reverse tool requests before the ordinary ACP SDK sees
- * them. All standard protocol traffic keeps the existing SDK adapter.
+ * Provides the browser's MCP server over ACP. The UI adapter owns chat;
+ * this stream handles the draft MCP binding and its request cancellation.
  */
 export function codeModeStream(stream: Stream, host: CodeModeHost, signal: AbortSignal, onSupport: (supported: boolean) => void, briefing?: () => string): Stream {
   const reader = stream.readable.getReader()
   const writer = stream.writable.getWriter()
   let supported = false
   let briefedSessionId: string | undefined
+  let registration: undefined | { requestId: null | number | string, serverId: string, sessionId?: string }
+  const requests = new Set<null | number | string>()
   const abort = () => host.cancel()
+  const dispatch = async (id: null | number | string, call: MessageMcpRequest): Promise<MessageMcpResponse> => {
+    const meta = call.params?._meta as Record<string, unknown> | undefined
+    if (meta?.['io.modelcontextprotocol/protocolVersion'] !== '2026-07-28'
+      || !meta['io.modelcontextprotocol/clientCapabilities'] || typeof meta['io.modelcontextprotocol/clientCapabilities'] !== 'object') {
+      throw new Error('MCP-over-ACP requires protocolVersion 2026-07-28 and clientCapabilities in params._meta.')
+    }
+    if (call.method === 'tools/list')
+      return { result: { tools: [tool] } }
+    if (call.method === 'ping')
+      return { result: {} }
+    if (call.method !== 'tools/call')
+      return { error: { code: -32601, message: `Unsupported MCP method: ${call.method}` } }
+    if (call.params?.name !== tool.name)
+      return { error: { code: -32602, message: `Unknown tool: ${String(call.params?.name)}` } }
+    const args = call.params.arguments as Partial<CodeCall> | undefined
+    // TODO(mcp-progress): codemode returns one final result. Operation-scoped
+    // MCP notifications belong to an approved streaming/progress tool slice.
+    return { result: await host.execute(id, { ...args, sessionId: registration?.sessionId, timeoutMs: args?.timeoutMs ?? 30000 }) }
+  }
   signal.addEventListener('abort', abort, { once: true })
   return {
     readable: new ReadableStream<AnyMessage>({
@@ -96,23 +135,33 @@ export function codeModeStream(stream: Stream, host: CodeModeHost, signal: Abort
           for (let next = await reader.read(); !next.done; next = await reader.read()) {
             const message = next.value
             if (!('method' in message) && 'result' in message) {
-              const result = message.result as { agentCapabilities?: { _meta?: { auv?: { codemode?: number } } } }
+              const result = message.result as { agentCapabilities?: { mcpCapabilities?: { acp?: boolean } }, sessionId?: string }
               if (result?.agentCapabilities) {
-                supported = result.agentCapabilities._meta?.auv?.codemode === 1
+                supported = result.agentCapabilities.mcpCapabilities?.acp === true
                 onSupport(supported)
               }
+              if (registration?.requestId === message.id && result?.sessionId) {
+                registration.sessionId = result.sessionId
+                host.setSession(result.sessionId)
+              }
             }
-            if ('method' in message && message.method === '_auv/codemode' && 'id' in message) {
-              const task = supported
-                ? host.execute(message.id, message.params)
-                : Promise.resolve({ content: [{ text: 'Codemode was not negotiated.', type: 'text' }], isError: true })
-              void task.then(result => writer.write({ id: message.id, jsonrpc: '2.0', result })).catch(abort)
+            if ('method' in message && message.method === 'mcp/message' && 'id' in message) {
+              const call = message.params as MessageMcpRequest
+              requests.add(message.id)
+              const task = supported && registration?.serverId === call?.serverId
+                ? dispatch(message.id, call)
+                : Promise.reject(new Error('This MCP server is not registered on this connection.'))
+              void task.then(
+                result => writer.write({ id: message.id, jsonrpc: '2.0', result }),
+                error => writer.write({ error: { code: -32602, message: error instanceof Error ? error.message : String(error) }, id: message.id, jsonrpc: '2.0' }),
+              ).catch(abort).finally(() => requests.delete(message.id))
             }
-            else if ('method' in message && message.method === '_auv/codemode/cancel') {
+            else if ('method' in message && message.method === '$/cancel_request') {
               const params = message.params as undefined | { requestId?: null | number | string }
               // A malformed notification must not cancel another call.
-              if (params?.requestId !== undefined)
+              if (params?.requestId !== undefined && requests.has(params.requestId))
                 host.cancel(params.requestId)
+              else controller.enqueue(message)
             }
             else {
               controller.enqueue(message)
@@ -137,6 +186,12 @@ export function codeModeStream(stream: Stream, host: CodeModeHost, signal: Abort
         if ('method' in message && message.method === 'session/cancel')
           host.cancel()
         let next = message
+        if (supported && 'method' in message && message.method === 'session/new' && 'id' in message) {
+          registration = { requestId: message.id, serverId: `auv-playground:${crypto.randomUUID()}` }
+          host.setSession(undefined)
+          const params = message.params as { mcpServers?: unknown[] }
+          next = { ...message, params: { ...params, mcpServers: [...(params.mcpServers ?? []), { name: 'auv-playground', serverId: registration.serverId, type: 'acp' }] } }
+        }
         if (briefing && 'method' in message && message.method === 'session/prompt') {
           const sessionId = (message.params as undefined | { sessionId?: string })?.sessionId ?? ''
           // New sessions reuse the stream, so the briefing belongs to the
