@@ -83,6 +83,11 @@ Validation passed:
 - Six-column Markdown tables, task lists, strikethrough, links, quotes, and fenced-code copying in the actual ACP message renderer.
 - `git diff --check`.
 
+The browser fixture below shows grouped tool calls, deliberate errors, a screenshot preview, and a Markdown report table.
+It uses synthetic ACP responses and the Mock desktop.
+
+![Agent UI browser fixture](evidence/2026-10-25-agent-markdown/agent-markdown.png)
+
 The live probe used ordinary OpenCode 2.0.26 through the configured remote Exterior Relay.
 It set the Mock Counter from zero to two and returned a window screenshot showing Count: 2.
 Nine agent tool calls appeared as two adjacent activity groups, with four and five calls.
