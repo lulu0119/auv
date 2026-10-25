@@ -74,6 +74,24 @@ describe('agent SDK help', () => {
   })
 
   // Help examples must execute against the same SDK interface that they describe.
+  it('shows how to output WindowClient data while keeping local callbacks inside the VM', async () => {
+    const help = api.describe({ path: 'text' })
+    expect(help).toMatchObject({ description: expect.stringContaining('functions') })
+    const list = api.describe({ path: 'auv.windows.list' })
+    if (!('examples' in list))
+      throw new Error('Missing window-list example')
+    const example = list.examples[0]
+    expect(api.help().rules.join(' ')).toContain('Array.map')
+    const outcome = await runCodeMode({ ...compileCell(example, { allowReturn: true }), breakpoints: [], codemode: { store: {}, timeoutMs: 2000 }, executionId: 1, mode: 'run' }, {
+      __bind: () => {},
+      __step: async () => {},
+      __stepSync: () => {},
+      auv: { windows: { list: async () => [{ capture: async () => ({}), id: 'w-counter', window: { title: 'Counter' } }] } },
+    }, new AbortController().signal)
+    expect(outcome).toMatchObject({ codemode: { content: [{ text: '[{"id":"w-counter","window":{"title":"Counter"}}]', type: 'text' }] }, status: 'ok' })
+  })
+
+  // Help examples must execute against the same SDK interface that they describe.
   it('lets a fresh VM discover help and execute a returned example', async () => {
     const sources: string[] = []
     const run = (source: string, auv = {}) => {

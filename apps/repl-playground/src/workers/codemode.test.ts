@@ -121,7 +121,19 @@ describe('isolated codemode', () => {
     } } }, new AbortController().signal)
     expect(outcome.status).toBe('error')
     expect(called).toBe(false)
-    expect(outcome.status === 'error' && outcome.message).toContain('callbacks')
+    expect(outcome.status === 'error' && outcome.message).toContain('Functions cannot cross the codemode VM boundary')
+  })
+
+  // ROOT CAUSE: text() and SDK arguments shared a function validator whose
+  // callback-only error incorrectly blamed a local Array.map callback.
+  it('allows local map callbacks and explains function-bearing output', async () => {
+    const globals = { ...hooks, auv: { windows: { list: async () => [{ capture: async () => ({}), id: 'w-counter', window: { title: 'Counter' } }] } } }
+    const mapped = await runCodeMode(request('const wins = await auv.windows.list(); text(wins.map(w => ({ id: w.id, window: w.window })));'), globals, new AbortController().signal)
+    expect(mapped).toMatchObject({ codemode: { content: [{ text: '[{"id":"w-counter","window":{"title":"Counter"}}]', type: 'text' }] }, status: 'ok' })
+
+    const raw = await runCodeMode(request('const wins = await auv.windows.list(); text(wins.map(w => ({ id: w.id, raw: w })));'), globals, new AbortController().signal)
+    expect(raw).toMatchObject({ message: expect.stringContaining('Functions cannot cross the codemode VM boundary'), status: 'error' })
+    expect(raw.status === 'error' && raw.message).toContain('window.id or window.window')
   })
 
   it('emits pixels only through an explicit image request', async () => {

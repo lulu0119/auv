@@ -39,7 +39,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
   // NOTICE(codemode-callbacks): callbacks/iterators need explicit VM
   // marshalling. Reject them until an approved streaming/callback slice.
   const validate = vm.unwrapResult(vm.evalCode(`value => JSON.stringify(value, (key, item) => {
-    if (typeof item === 'function') throw new TypeError('SDK callbacks are not supported in codemode yet');
+    if (typeof item === 'function') throw new TypeError('Functions cannot cross the codemode VM boundary. Pass data only; for WindowClient output, select window.id or window.window.');
     if (typeof item === 'bigint') return String(item);
     return item;
   })`))

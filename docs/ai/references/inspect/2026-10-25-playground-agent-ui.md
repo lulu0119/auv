@@ -56,6 +56,17 @@ The current UI does not infer these links from script text, timing, or output st
 The composer uses task-focused copy, a compact connection indicator, and the existing new-session action.
 The upstream chat primitive supplies a jump-to-latest control that respects manual history reading.
 
+Assistant text and reasoning use the `@assistant-ui/react-markdown` MarkdownText composition with `remark-gfm`.
+The library owns parsing, streamed text, and code-fence extraction.
+The local adapter applies the existing theme, scrolls wide tables, and reuses the shared clipboard helper for code copies.
+Tool protocol data and scripts remain plain text in their detail sections.
+
+The acceptance session also exposed misleading VM guidance.
+Its `Array.map` callback worked locally, but `raw: windowClient` included SDK method functions in the value passed to `text()`.
+The shared boundary validator reported an unsupported SDK callback, which led the agent to blame `map`.
+The error now names the function boundary, and help shows how to output each client's `id` and `window` metadata.
+Function transport remains unsupported; execution and state rules are unchanged.
+
 ## Validation
 
 The browser regression first failed against the checkpoint UI because no activity group existed.
@@ -65,10 +76,11 @@ It also checks connection retention, session changes, and fitting the workbench 
 
 Validation passed:
 
-- All 99 unit tests across 17 files.
+- All 101 unit tests across 17 files, including local map callbacks, function-bearing output, and executable help examples.
 - TypeScript type checking and the Vite production build.
 - ESLint for the changed Agent source and browser harness, with no warnings.
 - The browser harness, including returned-error metadata, harmless error-related text, image decoding, dialog dismissal, and script inspection.
+- Six-column Markdown tables, task lists, strikethrough, links, quotes, and fenced-code copying in the actual ACP message renderer.
 - `git diff --check`.
 
 The live probe used ordinary OpenCode 2.0.26 through the configured remote Exterior Relay.

@@ -51,6 +51,7 @@ catalog:
   '@alint-js/plugin': '^0.3.0'
   '@alint-js/tools-fs': '^0.3.0'
   '@assistant-ui/react': ^0.15.26
+  '@assistant-ui/react-markdown': ^0.14.24
   '@base-ui/react': ^1.8.0
   '@bufbuild/buf': 1.72.0
   '@bufbuild/protobuf': 2.13.0
@@ -112,6 +113,7 @@ catalog:
   react: ^19.3.0
   react-dom: ^19.3.0
   react-markdown: ^10.1.0
+  remark-gfm: ^4.0.1
   react-resizable-panels: ^4.14.2
   simple-git-hooks: ^2.13.1
 

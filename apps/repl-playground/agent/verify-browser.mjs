@@ -54,7 +54,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
         notify({ content: [{ content: { text: '0 errors found.', type: 'text' }, type: 'content' }], kind: 'read', rawInput: { path: 'notes.md' }, sessionUpdate: 'tool_call', status: 'completed', title: 'Read notes', toolCallId: 'neutral-result' })
         socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {
           sessionId: message.params.sessionId,
-          update: { content: { text: 'Connected through the test ACP peer.', type: 'text' }, sessionUpdate: 'agent_message_chunk' },
+          update: { content: { text: 'Connected through the test ACP peer.\n\n| Check | Operation | Expected | Actual | Evidence | Result |\n| --- | --- | --- | --- | --- | --- |\n| Counter | Click Increment twice and capture the window. | Count: 2 | Count: 2 | Screenshot | Passed |\n\n- [x] Verified\n\n~~Outdated~~\n\n> Checked with a screenshot.\n\n[Documentation](https://example.com/docs)\n\n```ts\ntext("verified");\n```', type: 'text' }, sessionUpdate: 'agent_message_chunk' },
         } }))
         result = { stopReason: 'end_turn' }
       }
@@ -96,6 +96,19 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     await page.getByRole('textbox', { name: 'Message the agent' }).fill('Check the connection')
     await page.getByRole('button', { exact: true, name: 'Send' }).click()
     await page.getByText('Connected through the test ACP peer.', { exact: true }).waitFor()
+    const markdown = page.locator('.agent-text').last()
+    await markdown.getByRole('cell', { exact: true, name: 'Passed' }).waitFor()
+    assert.equal(await markdown.getByRole('columnheader').count(), 6, 'GFM report tables must render as tables')
+    assert.equal(await markdown.getByRole('checkbox').isChecked(), true, 'GFM task lists must render checked items')
+    assert.equal(await markdown.locator('del').textContent(), 'Outdated')
+    assert.equal((await markdown.locator('blockquote').textContent()).trim(), 'Checked with a screenshot.')
+    assert.equal(await markdown.getByRole('link', { name: 'Documentation' }).getAttribute('href'), 'https://example.com/docs')
+    assert.equal(await markdown.locator('pre code').textContent(), 'text("verified");\n')
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await markdown.getByRole('button', { exact: true, name: 'Copy code' }).click()
+    await markdown.getByRole('button', { exact: true, name: 'Copied' }).waitFor()
+    // The Windows clipboard normalizes LF to CRLF.
+    assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replaceAll('\r\n', '\n'), 'text("verified");\n', 'Copy must preserve the fenced code text')
     const activity = page.locator('[data-agent-activity]')
     await activity.locator('summary').first().waitFor()
     assert.match(await activity.locator('summary').first().textContent(), /4 activities/, 'Adjacent tool calls must share a compact activity summary')

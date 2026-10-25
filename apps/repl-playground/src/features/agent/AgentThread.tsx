@@ -1,7 +1,5 @@
 import type { ReasoningMessagePartComponent, TextMessagePartComponent } from '@assistant-ui/react'
 
-import Markdown from 'react-markdown'
-
 import { AuiIf, ComposerPrimitive, groupPartByType, MessagePrimitive, ThreadPrimitive, useAuiState } from '@assistant-ui/react'
 import { useAcpPermissions, useAcpRuntimeExtras } from '@hafbit/react-acp'
 import { useState } from 'react'
@@ -10,6 +8,7 @@ import { iconButtonClassName } from '../../components/icon-button-class'
 import { IconButton } from '../../components/IconButton'
 import { isSandboxBriefing } from './agent-context'
 import { AgentActivity, AgentTool } from './AgentActivity'
+import { MarkdownText } from './MarkdownText'
 
 import './agent.css'
 
@@ -77,11 +76,7 @@ export function AgentThread() {
 const AgentText: TextMessagePartComponent = ({ text }) => {
   if (!text)
     return <span className="text-fg-subtle animate-pulse">●</span>
-  return (
-    <div className="agent-md agent-text">
-      <Markdown>{text}</Markdown>
-    </div>
-  )
+  return <MarkdownText className="agent-md agent-text" />
 }
 
 const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
@@ -90,9 +85,7 @@ const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
   return (
     <details className="text-[12px] text-fg-muted">
       <summary className="cursor-pointer">Reasoning</summary>
-      <div className="agent-md leading-relaxed mt-1">
-        <Markdown>{text}</Markdown>
-      </div>
+      <MarkdownText className="agent-md leading-relaxed mt-1" />
     </details>
   )
 }

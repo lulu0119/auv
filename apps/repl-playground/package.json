@@ -17,6 +17,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@assistant-ui/react": "catalog:",
+    "@assistant-ui/react-markdown": "catalog:",
     "@auv-js/sdk": "workspace:*",
     "@base-ui/react": "catalog:",
     "@bufbuild/protobuf": "catalog:",
@@ -43,6 +44,7 @@
     "react-dom": "catalog:",
     "react-markdown": "catalog:",
     "react-resizable-panels": "catalog:",
+    "remark-gfm": "catalog:",
     "thumbhash": "catalog:",
     "ts-blank-space": "catalog:",
     "typescript": "catalog:",

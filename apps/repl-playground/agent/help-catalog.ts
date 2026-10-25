@@ -191,7 +191,7 @@ export function buildHelpCatalog(onSource?: (path: string) => void): ApiCatalog 
   }
 
   entries.push(
-    { description: 'Emit selected text or JSON. Only explicit output returns to the agent.', examples: ['text({ found: 1 })'], path: 'text', relatedTypes: [], signature: 'text(value: unknown): void' },
+    { description: 'Emit selected text or JSON data without functions. For WindowClient, output its id or window metadata. Only explicit output returns to the agent.', examples: ['text({ found: 1 })', ...examples['auv.windows.list']], path: 'text', relatedTypes: [], signature: 'text(value: unknown): void' },
     { description: 'Fetch a capture reference as bounded PNG/JPEG output. Pixels stay outside VM memory.', examples: examples['WindowClient.capture'], path: 'image', relatedTypes: ['CaptureTarget'], signature: 'image(capture: CaptureTarget, options?: { maxSize?: { width: number, height: number }, encoding?: sdk.ImageEncoding.PNG | sdk.ImageEncoding.JPEG }): Promise<void>' },
     { description: 'Keep a small JSON value after successful execution. Use undefined to remove a key.', examples: ['store("windowId", (await auv.windows.resolve({ appName: "Counter" })).id)'], path: 'store', relatedTypes: [], signature: 'store(key: string, value: unknown): void' },
     { description: 'Read a saved JSON value. Returns undefined for a missing key.', examples: ['text(load("windowId"))'], path: 'load', relatedTypes: [], signature: 'load(key: string): unknown' },
