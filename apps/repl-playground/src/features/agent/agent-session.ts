@@ -6,13 +6,12 @@ import { create } from 'zustand'
 
 import { version } from '../../../package.json'
 import { sandboxBriefing } from './agent-context'
-import { CodeModeHost, codeModeStream } from './codemode-bridge'
+import { codeModeConnection, CodeModeHost } from './codemode-bridge'
 import { relayUrl, serveMcp } from './exterior'
 
 export interface AgentConnection {
   controller: AcpThreadController
   error: string
-  supportsCodemode: boolean
   target: AgentTarget
 }
 
@@ -26,25 +25,29 @@ export function connectAgent(account: AccountSession, target: AgentTarget): void
   const controller = new AcpThreadController({
     clientInfo: { name: 'auv-playground', version },
     connection: {
-      adapter: new SdkAcpClientAdapter(async ({ signal }) => {
-        const tools = await serveMcp(relayUrl(), await account.accessToken(), transport => void codemode.connect(transport), signal)
-        try {
-          signal.throwIfAborted()
-          const { url } = await account.openConnection({ agentName: target.agentName, deviceId: target.deviceId }, signal)
-          signal.throwIfAborted()
-          void tools.closed.then((reason) => {
-            if (!signal.aborted) {
-              codemode.cancel()
-              update({ error: reason === 'revoked' ? 'Access was revoked. Sign in again.' : 'The tool connection closed. Reconnect the agent.' })
-            }
-          })
-          return codeModeStream(createWebSocketStream(url), codemode, signal, tools, supportsCodemode => update({ supportsCodemode }), sandboxBriefing)
-        }
-        catch (cause) {
-          tools.close()
-          throw cause
-        }
-      }),
+      adapter: {
+        async connect(options) {
+          const { signal } = options
+          const tools = await serveMcp(relayUrl(), await account.accessToken(), transport => void codemode.connect(transport), signal)
+          try {
+            signal.throwIfAborted()
+            const { url } = await account.openConnection({ agentName: target.agentName, deviceId: target.deviceId }, signal)
+            signal.throwIfAborted()
+            void tools.closed.then((reason) => {
+              if (!signal.aborted) {
+                codemode.cancel()
+                update({ error: reason === 'revoked' ? 'Access was revoked. Sign in again.' : 'The tool connection closed. Reconnect the agent.' })
+              }
+            })
+            const acp = await new SdkAcpClientAdapter(() => createWebSocketStream(url)).connect(options)
+            return codeModeConnection(acp, codemode, tools, sandboxBriefing)
+          }
+          catch (cause) {
+            tools.close()
+            throw cause
+          }
+        },
+      },
       type: 'adapter',
     },
     onThreadIdChange: sessionId => codemode.setSession(sessionId),
@@ -61,13 +64,13 @@ export function connectAgent(account: AccountSession, target: AgentTarget): void
     })
   }
 
-  useAgentSession.setState({ connection: { controller, error: '', supportsCodemode: false, target } })
+  useAgentSession.setState({ connection: { controller, error: '', target } })
   void controller.connect().then(async () => {
     const connection = useAgentSession.getState().connection
-    if (connection?.controller !== controller || !connection.supportsCodemode || controller.getState().connectionStatus !== 'ready')
+    const { capabilities, connectionStatus } = controller.getState()
+    if (connection?.controller !== controller || capabilities?.mcpCapabilities?.http !== true || connectionStatus !== 'ready')
       return
     await controller.createSession()
-    await controller.refreshSessions()
   }).catch((cause: unknown) => {
     controller.dispose()
     update({ error: cause instanceof Error ? cause.message : String(cause) })

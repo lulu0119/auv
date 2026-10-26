@@ -85,7 +85,9 @@ describe('isolated codemode', () => {
   })
 
   it('commits small JSON state on success and keeps old state on failure', async () => {
-    const first = await runCodeMode(request('store("windowId", "counter"); return load("windowId");'), hooks, new AbortController().signal)
+    const initial = { windowId: 'initial' }
+    const first = await runCodeMode(request('store("windowId", "counter"); store("temporary", true); store("temporary", undefined); return load("windowId");', initial), hooks, new AbortController().signal)
+    expect(initial).toEqual({ windowId: 'initial' })
     expect(first.codemode?.store).toEqual({ windowId: 'counter' })
     expect(first.codemode?.content).toEqual([{ text: 'counter', type: 'text' }])
     const failed = await runCodeMode(request('store("windowId", "other"); text("before failure"); throw new Error("broken");', first.codemode!.store), hooks, new AbortController().signal)

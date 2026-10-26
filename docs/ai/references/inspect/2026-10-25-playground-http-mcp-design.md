@@ -31,6 +31,12 @@ The MCP SDK handles initialization, tool requests, and cancellation notification
 The browser no longer handles experimental `mcp/message` requests.
 The agent device runs its ordinary ACP agent, without a Playground startup wrapper.
 
+`codeModeConnection` adapts the typed `AcpClientConnection` interface.
+It supplies the MCP endpoint through `newSession`, adds the first-prompt briefing, and forwards cancellation.
+The ACP SDK owns message parsing and request matching.
+The controller owns negotiated capabilities, connection errors, and active-session selection.
+Session creation updates controller state directly; the Playground does not refresh an unused session list.
+
 Exterior owns endpoint credentials, HTTP transport, browser routing, and relay cleanup.
 AUV owns the tool and its selected device, Mock desktop, store, and timeline.
 The Playground remains a static deployment, including its current assets-only Worker.
@@ -45,7 +51,7 @@ Disconnect and Reconnect dispose the current controller. A page reload closes it
 
 The adapter prepares the MCP endpoint before requesting the single-use ACP ticket.
 The ticket therefore does not wait for MCP setup.
-The endpoint closes when startup fails, the controller aborts, or the ACP stream closes.
+The endpoint closes when startup fails, the controller aborts, or the ACP connection closes.
 Canceled startup cannot update a replacement connection.
 
 `useAcpControllerRuntime` projects an existing controller without managing its connection.
@@ -61,7 +67,8 @@ StrictMode remains enabled and does not create discarded MCP endpoints.
 One endpoint belongs to one ACP connection, following Exterior's SDK contract.
 Agents may share supplied MCP servers between ACP sessions in the same process.
 The Playground therefore binds execution to its active session and resets its JSON store on session replacement.
-Request cancellation uses a unique invocation id because MCP request ids can repeat between transports.
+Request cancellation combines the MCP request signal with the active execution signal.
+Signals belong to individual invocations, so cancellation cannot affect a call from another transport with the same request id.
 
 The migration preserves these execution rules:
 
@@ -72,6 +79,9 @@ The migration preserves these execution rules:
 - SDK input already delivered is not rolled back.
 - One mutable desktop runs one script at a time.
 - The editor keeps its separate REPL state.
+
+The VM validates each store update before replacing its local state.
+It returns the state only after success, so the input store remains unchanged.
 
 Streaming tool progress, SDK callbacks, and async iterators remain deferred at their existing code markers.
 Complete script recording retains the previously documented CPU-loop cost.
@@ -89,6 +99,10 @@ Startup failures remain visible without automatic replacement agents. Explicit r
 The fixture also cancels startup during the ticket request and immediately connects again.
 Only the replacement opens an ACP socket, and the canceled request cannot replace its state.
 Unit tests also exercise the MCP host with the MCP SDK's real client and linked transports.
+
+The 2026-10-26 simplification passed all 101 unit tests, TypeScript checking, the production build, changed-file ESLint, and the browser harness.
+The unit tests use the real ACP adapter and controller for session setup, briefing, cancellation, and connection cleanup.
+The browser harness also rejects session-list requests when the agent does not advertise that capability.
 
 Evidence level: live remote Relay and ordinary local OpenCode 2.0.26, with model inference.
 The actual Playground page connected to `https://relay.apps.superpowerlulu.win`.

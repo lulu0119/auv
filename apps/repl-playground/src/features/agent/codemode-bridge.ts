@@ -1,5 +1,5 @@
-import type { AnyMessage, Stream } from '@agentclientprotocol/sdk'
 import type { ServedMcp } from '@exterioragentprotocol/sdk/client'
+import type { AcpClientConnection } from '@hafbit/react-acp/core'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 
@@ -28,13 +28,12 @@ const tool = {
 
 /** Owns one ACP session's JSON state and the currently executing tool call. */
 export class CodeModeHost {
-  #active?: { abort: AbortController, id: null | number | string }
+  #active?: AbortController
   #sessionId?: string
   #store: Record<string, unknown> = {}
 
-  cancel(requestId?: null | number | string): void {
-    if (requestId === undefined || this.#active?.id === requestId)
-      this.#active?.abort.abort()
+  cancel(): void {
+    this.#active?.abort()
   }
 
   /** Each Relay MCP session gets its own protocol connection to this execution host. */
@@ -44,25 +43,15 @@ export class CodeModeHost {
     server.setRequestHandler(CallToolRequestSchema, async (request, { signal }) => {
       if (request.params.name !== tool.name)
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${request.params.name}`)
-      // MCP request ids can repeat across sessions. A cancellation belongs only
-      // to this invocation, even when another session uses the same request id.
-      const id = crypto.randomUUID()
-      const cancel = () => this.cancel(id)
-      signal.addEventListener('abort', cancel, { once: true })
       const args = request.params.arguments
-      try {
-        // TODO(mcp-progress): operation-scoped notifications belong to an
-        // approved streaming/progress tool slice. Return one final result.
-        return await this.execute(id, { ...args, sessionId: this.#sessionId, timeoutMs: args?.timeoutMs ?? 30000 })
-      }
-      finally {
-        signal.removeEventListener('abort', cancel)
-      }
+      // TODO(mcp-progress): operation-scoped notifications belong to an
+      // approved streaming/progress tool slice. Return one final result.
+      return this.execute({ ...args, sessionId: this.#sessionId, timeoutMs: args?.timeoutMs ?? 30000 }, signal)
     })
     await server.connect(transport)
   }
 
-  async execute(id: null | number | string, params: unknown): Promise<CallToolResult> {
+  async execute(params: unknown, requestSignal?: AbortSignal): Promise<CallToolResult> {
     const error = (text: string): CallToolResult => ({ content: [{ text, type: 'text' }], isError: true })
     const call = params as Partial<CodeCall> | undefined
     if (!this.#sessionId || call?.sessionId !== this.#sessionId)
@@ -75,9 +64,12 @@ export class CodeModeHost {
       || !Number.isInteger(call.timeoutMs) || call.timeoutMs! < 1 || call.timeoutMs! > 120000) {
       return error('Codemode requires code and a timeoutMs from 1 to 120000.')
     }
-    const active = { abort: new AbortController(), id }
+    const active = new AbortController()
     this.#active = active
+    // Each MCP request carries its own signal, including across transports.
+    const signal = requestSignal ? AbortSignal.any([active.signal, requestSignal]) : active.signal
     try {
+      signal.throwIfAborted()
       // TODO(codemode-editor-rerun): the editor displays this source for
       // inspection. Manual Run/replay use REPL globals; add VM selection and
       // codemode editor types together in an approved human-debugging slice.
@@ -85,32 +77,29 @@ export class CodeModeHost {
       const outcome = await session.run({
         codemode: { store: this.#store, timeoutMs: call.timeoutMs! },
         mode: 'run',
-        signal: active.abort.signal,
+        signal,
         source: call.code,
         startLine: 1,
       })
       const content = [...(outcome.codemode?.content ?? [])]
-      const succeeded = outcome.status === 'ok' && !active.abort.signal.aborted
+      const succeeded = outcome.status === 'ok' && !signal.aborted
       if (succeeded && outcome.codemode)
         this.#store = outcome.codemode.store
       // TODO(codemode-result-metadata): typed MCP outcomes require an approved
       // result contract; this interface exposes content and isError.
-      content.push({
-        text: succeeded
-          ? 'Script completed. This confirms execution only; verify the requested external state separately.'
-          : outcome.status === 'error'
-            ? `Script failed${outcome.line === undefined ? '' : ` at line ${outcome.line}`}: ${outcome.message}`
-            : outcome.status === 'stopped' && outcome.reason === 'timeout'
-              ? `Script timed out after ${call.timeoutMs} ms. Delivered inputs are not undone.`
-              : 'Script canceled. Delivered inputs are not undone.',
-        type: 'text',
-      })
+      let text = 'Script canceled. Delivered inputs are not undone.'
+      if (succeeded)
+        text = 'Script completed. This confirms execution only; verify the requested external state separately.'
+      else if (outcome.status === 'error')
+        text = `Script failed${outcome.line === undefined ? '' : ` at line ${outcome.line}`}: ${outcome.message}`
+      else if (outcome.status === 'stopped' && outcome.reason === 'timeout')
+        text = `Script timed out after ${call.timeoutMs} ms. Delivered inputs are not undone.`
+      content.push({ text, type: 'text' })
       return { content, isError: !succeeded }
     }
     catch (cause) { return error(cause instanceof Error ? cause.message : String(cause)) }
     finally {
-      if (this.#active === active)
-        this.#active = undefined
+      this.#active = undefined
     }
   }
 
@@ -124,91 +113,34 @@ export class CodeModeHost {
 }
 
 /**
- * Adds the sandbox briefing to ACP chat and ends the browser tool endpoint
- * with its ACP connection. MCP itself uses Exterior's separate HTTP endpoint.
+ * Adds codemode to the typed ACP connection. The SDK owns protocol messages.
+ * This adapter owns session setup, briefing, and tool endpoint cleanup.
  */
-export function codeModeStream(stream: Stream, host: CodeModeHost, signal: AbortSignal, tools: ServedMcp, onSupport: (supported: boolean) => void, briefing?: () => string): Stream {
-  const reader = stream.readable.getReader()
-  const writer = stream.writable.getWriter()
+export function codeModeConnection(connection: AcpClientConnection, host: CodeModeHost, tools: ServedMcp, briefing: () => string): AcpClientConnection {
   let briefedSessionId: string | undefined
-  let creatingRequest: null | number | string | undefined
-  let supported = false
-  const abort = () => {
+  const close = () => {
     host.cancel()
     tools.close()
   }
-  signal.addEventListener('abort', abort, { once: true })
+  if (connection.signal.aborted)
+    close()
+  else connection.signal.addEventListener('abort', close, { once: true })
   return {
-    readable: new ReadableStream<AnyMessage>({
-      async cancel(reason) {
-        abort()
-        await reader.cancel(reason)
-      },
-      async start(controller) {
-        try {
-          for (let next = await reader.read(); !next.done; next = await reader.read()) {
-            const message = next.value
-            if (!('method' in message) && 'result' in message) {
-              const result = message.result as { agentCapabilities?: { mcpCapabilities?: { http?: boolean } }, sessionId?: string }
-              if (result?.agentCapabilities) {
-                supported = result.agentCapabilities.mcpCapabilities?.http === true
-                onSupport(supported)
-              }
-              if (creatingRequest === message.id && result?.sessionId)
-                host.setSession(result.sessionId)
-            }
-            controller.enqueue(message)
-          }
-          controller.close()
-        }
-        catch (error) { controller.error(error) }
-        finally {
-          abort()
-          signal.removeEventListener('abort', abort)
-        }
-      },
-    }),
-    writable: new WritableStream<AnyMessage>({
-      abort: (reason) => {
-        abort()
-        return writer.abort(reason)
-      },
-      close: () => {
-        abort()
-        return writer.close()
-      },
-      async write(message) {
-        if ('method' in message && message.method === 'session/cancel')
-          host.cancel()
-        let next = message
-        if (supported && 'method' in message && message.method === 'session/new' && 'id' in message) {
-          creatingRequest = message.id
-          host.setSession(undefined)
-          const params = message.params as { mcpServers?: unknown[] }
-          next = { ...message, params: { ...params, mcpServers: [...(params.mcpServers ?? []), { headers: tools.headers, name: 'auv-playground', type: 'http', url: tools.url }] } }
-        }
-        if (briefing && 'method' in message && message.method === 'session/prompt') {
-          const sessionId = (message.params as undefined | { sessionId?: string })?.sessionId ?? ''
-          // New sessions reuse the stream, so the briefing belongs to the
-          // active session rather than the connection. The UI never resumes.
-          if (briefedSessionId !== sessionId) {
-            next = withBriefing(message, briefing())
-            if (next !== message)
-              briefedSessionId = sessionId
-          }
-        }
-        await writer.write(next)
-      },
-    }),
+    ...connection,
+    cancel(sessionId) {
+      host.cancel()
+      return connection.cancel(sessionId)
+    },
+    newSession(request) {
+      host.setSession(undefined)
+      return connection.newSession({ ...request, mcpServers: [...request.mcpServers, { headers: tools.headers, name: 'auv-playground', type: 'http', url: tools.url }] })
+    },
+    prompt(request) {
+      // New sessions reuse the connection, so each receives its own briefing.
+      if (briefedSessionId === request.sessionId)
+        return connection.prompt(request)
+      briefedSessionId = request.sessionId
+      return connection.prompt({ ...request, prompt: [{ text: briefing(), type: 'text' }, ...request.prompt] })
+    },
   }
-}
-
-/** Add environment instructions to the user prompt without a separate agent turn. */
-export function withBriefing(message: AnyMessage, briefing: string): AnyMessage {
-  if (!('method' in message) || message.method !== 'session/prompt')
-    return message
-  const params = message.params as undefined | { prompt?: unknown }
-  if (!params || !Array.isArray(params.prompt))
-    return message
-  return { ...message, params: { ...params, prompt: [{ text: briefing, type: 'text' }, ...params.prompt] } }
 }

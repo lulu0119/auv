@@ -148,7 +148,6 @@ function AgentToolbar() {
     // TODO(agent-session-list): session disposal requires a host close
     // capability; add it with an approved session-lifecycle contract.
     void extras.createSession()
-      .then(() => extras.refreshSessions())
       .catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : String(cause)))
       .finally(() => setBusy(false))
   }

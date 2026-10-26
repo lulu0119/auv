@@ -188,6 +188,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     assert.equal(prompts.length, 2)
     assert.notEqual(prompts[0].params.sessionId, prompts[1].params.sessionId)
     assert.ok(prompts[1].params.prompt.some(part => part.text?.includes('api.help()')), 'New sessions must receive the briefing again')
+    assert.equal(messages.some(message => message.method === 'session/list'), false, 'Creating sessions must not request a session list when the agent does not advertise one')
     await page.getByRole('button', { exact: true, name: 'Disconnect' }).click()
     supported = false
     const newSessions = messages.filter(message => message.method === 'session/new').length

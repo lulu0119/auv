@@ -29,7 +29,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
   vm.runtime.setMaxStackSize(512 * 1024)
   vm.runtime.setInterruptHandler(() => signal.aborted || Date.now() >= deadline)
   const content: NonNullable<RunOutcome['codemode']>['content'] = []
-  const store = structuredClone(request.codemode!.store)
+  let store = structuredClone(request.codemode!.store)
   let outputChars = 0
   let imageChars = 0
   let closed = false
@@ -191,8 +191,7 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
       else Object.defineProperty(next, key, { configurable: true, enumerable: true, value: structuredClone(value), writable: true })
       if (JSON.stringify(next).length > 64000)
         throw new Error('Codemode store exceeds 64000 characters')
-      for (const name of Object.keys(store)) delete store[name]
-      for (const [name, item] of Object.entries(next)) Object.defineProperty(store, name, { configurable: true, enumerable: true, value: item, writable: true })
+      store = next
     }, false)
     install('load', (key: string) => Object.hasOwn(store, key) ? structuredClone(store[key]) : undefined, false)
     install('text', text, false)

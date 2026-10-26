@@ -482,7 +482,7 @@ These are known and intentionally deferred; each is marked in code.
   Agent browser-auth (`auth-required`) has no UI yet.
   Codemode negotiation is required before the session starts.
   SDK callbacks and iterators remain deferred (`NOTICE(codemode-callbacks)`).
-  A failed initial connection obtains a fresh ticket, with two automatic retries.
+  An explicit reconnect obtains a fresh ticket after a failed connection.
 - `const` at the top level becomes reassignable across cells (same as
   `node:repl`), and a line starting with `(` or `[` continues the previous
   statement unless it ends with `;`.

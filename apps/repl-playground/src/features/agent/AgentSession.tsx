@@ -1,7 +1,7 @@
 import type { AgentConnection } from './agent-session'
 
 import { AssistantRuntimeProvider } from '@assistant-ui/react'
-import { useAcpConnection, useAcpControllerRuntime, useAcpThreadState } from '@hafbit/react-acp'
+import { useAcpControllerRuntime, useAcpThreadState } from '@hafbit/react-acp'
 
 import { Empty } from '../../components/Empty'
 import { AgentThread } from './AgentThread'
@@ -60,14 +60,14 @@ function SessionBody({ connection, onRetry }: {
   connection: AgentConnection
   onRetry: () => void
 }) {
-  const { error, status } = useAcpConnection()
   const thread = useAcpThreadState()
+  const status = thread.connectionStatus
 
   if (status === 'auth-required')
     return <AuthPanel />
   if (connection.error || status === 'error' || status === 'closed') {
-    const message = connection.error || describeConnectionError(error) || status
     const hint = describeConnectionError(thread.connectionError)
+    const message = connection.error || hint || status
     return (
       <Empty>
         <span className="flex flex-col gap-2 max-w-72 items-center">
@@ -80,7 +80,7 @@ function SessionBody({ connection, onRetry }: {
   }
   if (status !== 'ready')
     return <Empty>{status === 'connecting' ? 'Opening the agent.' : status}</Empty>
-  if (!connection.supportsCodemode)
+  if (thread.capabilities?.mcpCapabilities?.http !== true)
     return <Empty>This agent does not support HTTP MCP. Choose an agent with HTTP MCP support.</Empty>
   if (thread.activeSessionId === undefined)
     return <Empty>Starting a new session.</Empty>
