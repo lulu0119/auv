@@ -433,21 +433,8 @@ export function CodeEditor() {
     }
     document.addEventListener('playground:run', onRunRequest)
 
-    // The Agent tab writes agent-approved scripts into the editor.
-    const onSetSource = (event: Event) => {
-      const source = (event as CustomEvent<string>).detail
-      view.dispatch({ changes: { from: 0, insert: source, to: view.state.doc.length } })
-      void language.update(source)
-      try {
-        localStorage.setItem(STORAGE_KEY, source)
-      }
-      catch {}
-    }
-    document.addEventListener('playground:set-source', onSetSource)
-
     return () => {
       document.removeEventListener('playground:run', onRunRequest)
-      document.removeEventListener('playground:set-source', onSetSource)
       unsubscribe()
       window.clearTimeout(timer)
       view.destroy()

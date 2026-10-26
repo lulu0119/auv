@@ -8,7 +8,6 @@ import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } fr
 
 import { version } from '../../../package.json'
 import { session } from '../../runtime/session'
-import { applyScriptToEditor } from './editor-bridge'
 
 const tool = {
   description: [
@@ -84,10 +83,6 @@ export class CodeModeHost {
     const signal = AbortSignal.any([active.signal, requestSignal])
     try {
       signal.throwIfAborted()
-      // TODO(codemode-editor-rerun): the editor displays this source for
-      // inspection. Manual Run/replay use REPL globals; add VM selection and
-      // codemode editor types together in an approved human-debugging slice.
-      applyScriptToEditor(code)
       const outcome = await session.run({
         codemode: { store: this.#store, timeoutMs },
         mode: 'run',

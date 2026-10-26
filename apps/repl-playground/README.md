@@ -388,7 +388,6 @@ already delivered remain effective. Script completion proves execution only.
 Read app state to verify the requested result. SDK callbacks, async iterators
 and editor-only helpers are deferred. They fail explicitly instead of
 silently returning incomplete results.
-Agent code appears in the editor for inspection. Use the agent to rerun it.
 Run, stepping, replay and editor types use the editor REPL
 environment, which does not supply codemode helpers.
 

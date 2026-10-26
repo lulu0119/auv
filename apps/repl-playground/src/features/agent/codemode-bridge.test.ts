@@ -11,7 +11,6 @@ import { codeModeConnection, CodeModeHost } from './codemode-bridge'
 
 const execution = vi.hoisted(() => ({ run: vi.fn(), running: false }))
 vi.mock('../../runtime/session', () => ({ session: execution }))
-vi.mock('./editor-bridge', () => ({ applyScriptToEditor: vi.fn() }))
 
 /** Exercise the same MCP interface used by agents, with an in-memory transport. */
 async function connectTools(host: CodeModeHost): Promise<Client> {

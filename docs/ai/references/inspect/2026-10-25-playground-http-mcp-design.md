@@ -130,8 +130,8 @@ Any stricter validation belongs at the shared SDK serialization boundary.
 SDK callbacks and async iterators cannot cross the VM boundary.
 Local callbacks such as `Array.map` work.
 Function-bearing SDK clients cannot pass through `text()` or the JSON store; output their IDs and metadata instead.
-The editor displays agent source for inspection. Manual Run, stepping, and replay use the editor REPL environment.
-Streaming tool progress and editor execution of agent scripts remain deferred at their code markers.
+Manual Run, stepping, and replay use the editor REPL environment.
+Streaming tool progress remains deferred at its code marker.
 
 `image(capture)` accepts an AUV capture reference and fetches bounded pixels on the host.
 Pixels stay outside the VM and session store.
