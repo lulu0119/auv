@@ -1,14 +1,12 @@
-import type { AgentConnection } from './AgentSession'
 import type { AccountSession, AgentTarget } from './exterior'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Empty } from '../../components/Empty'
 import { Field, Hint } from '../../components/Field'
+import { connectAgent, disconnectAgent, useAgentSession } from './agent-session'
 import { AgentSession } from './AgentSession'
-import { listTargets, openAgentConnection, useAccount } from './exterior'
-
-const maxAutoRetries = 2
+import { listTargets, useAccount } from './exterior'
 
 /**
  * Agent tab: Exterior sign-in, one of the account's online devices, then a
@@ -21,82 +19,17 @@ const maxAutoRetries = 2
  */
 export function AgentTab() {
   const session = useAccount()
-  const signedIn = session.account.phase === 'signed-in'
-  const openConnection = session.openConnection
-  const [target, setTarget] = useState<AgentTarget | null>(null)
-  const [ticket, setTicket] = useState<AgentConnection | null>(null)
-  const [ticketError, setTicketError] = useState('')
-  const [opening, setOpening] = useState(false)
-  const [autoRetries, setAutoRetries] = useState(0)
-  const retryingRef = useRef(false)
-
-  const openTicket = useCallback(async (next: AgentTarget) => {
-    if (!signedIn)
-      return
-    setOpening(true)
-    setTicketError('')
-    try {
-      setTicket(await openAgentConnection(openConnection, next))
-    }
-    catch (cause) {
-      setTicketError(cause instanceof Error ? cause.message : String(cause))
-    }
-    finally {
-      setOpening(false)
-      retryingRef.current = false
-    }
-  }, [openConnection, signedIn])
-
-  // A ticket is single-use. React StrictMode mounts twice in dev, so the
-  // ghost mount burns the first ticket and the live mount dies before ever
-  // reaching ready. Reopen with a fresh ticket, bounded.
-  const handleInfantDeath = useCallback(() => {
-    if (!target || retryingRef.current || autoRetries >= maxAutoRetries)
-      return
-    retryingRef.current = true
-    setAutoRetries(count => count + 1)
-    console.warn(`Agent connection died before ready; reopening a fresh ticket (attempt ${autoRetries + 1}/${maxAutoRetries})`)
-    void openTicket(target)
-  }, [autoRetries, openTicket, target])
-
-  const connect = useCallback((next: AgentTarget) => {
-    setTarget(next)
-    setTicket(null)
-    setTicketError('')
-    setAutoRetries(0)
-    retryingRef.current = false
-    void openTicket(next)
-  }, [openTicket])
-
-  const retry = useCallback(() => {
-    if (!target)
-      return
-    setAutoRetries(0)
-    void openTicket(target)
-  }, [openTicket, target])
-
-  const disconnect = useCallback(() => {
-    setTarget(null)
-    setTicket(null)
-    setTicketError('')
-    setAutoRetries(0)
-    retryingRef.current = false
-  }, [])
-
-  if (!target) {
+  const connection = useAgentSession(state => state.connection)
+  if (!connection) {
     // A sign-in phase change remounts the form for fresh device state.
     // Token refreshes keep the current selection.
-    return <ConnectView key={session.account.phase} onConnected={connect} session={session} />
+    return <ConnectView key={session.account.phase} onConnected={target => connectAgent(session, target)} session={session} />
   }
   return (
     <AgentSession
-      accessToken={session.accessToken}
-      connection={ticket}
-      onDisconnect={disconnect}
-      onInfantDeath={handleInfantDeath}
-      onRetry={retry}
-      opening={opening}
-      ticketError={ticketError}
+      connection={connection}
+      onDisconnect={disconnectAgent}
+      onRetry={() => connectAgent(session, connection.target)}
     />
   )
 }

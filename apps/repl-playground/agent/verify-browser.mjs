@@ -22,14 +22,28 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
   const messages = []
   let supported = true
   let connections = 0
+  let ticketRequests = 0
+  let startupError = false
+  let pendingTicket
+  let notifyTicket
+  const tickets = new Set()
   const clients = []
-  server.on('connection', (socket) => {
+  server.on('connection', (socket, request) => {
     connections++
+    const ticket = new URL(request.url, 'http://localhost').searchParams.get('ticket')
+    if (!tickets.delete(ticket)) {
+      socket.close(1008, 'Ticket expired or already consumed')
+      return
+    }
     socket.on('message', async (data) => {
       const message = JSON.parse(data.toString())
       messages.push(message)
       let result
       if (message.method === 'initialize') {
+        if (startupError) {
+          socket.send(JSON.stringify({ error: { code: -32603, message: 'Agent startup failed' }, id: message.id, jsonrpc: '2.0' }))
+          return
+        }
         result = { agentCapabilities: supported ? { mcpCapabilities: { http: true } } : {}, protocolVersion: 1 }
       }
       else if (message.method === 'session/new') {
@@ -74,20 +88,40 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     await page.route(`${relay.url}/eap/v1/devices`, route => route.fulfill({ json: { devices: [
       { agents: [{ agentType: 'custom', name: 'auv' }], hostname: 'agent-device', id: 'device', platform: 'windows', workingDirectory: cwd },
     ] } }))
-    await page.route(`${relay.url}/eap/v1/connections`, (route) => {
+    await page.route(`${relay.url}/eap/v1/connections`, async (route) => {
       if (route.request().method() === 'OPTIONS')
         return route.fulfill({ status: 204 })
       assert.deepEqual(route.request().postDataJSON(), { agentName: 'auv', deviceId: 'device' })
       assert.equal(route.request().headers().authorization, 'Bearer connection-token')
-      return route.fulfill({ json: { agentName: 'auv', agentType: 'custom', url: `ws://127.0.0.1:${server.address().port}` } })
+      const ticket = String(++ticketRequests)
+      tickets.add(ticket)
+      if (pendingTicket) {
+        const pending = pendingTicket
+        pendingTicket = undefined
+        notifyTicket()
+        await pending
+      }
+      return route.fulfill({ json: { agentName: 'auv', agentType: 'custom', url: `ws://127.0.0.1:${server.address().port}?ticket=${ticket}` } })
     })
-    await page.goto(url)
+    const initialEndpoints = relay.registrations.length
+    await page.goto(new URL('agent/lifecycle.fixture.html', url).href)
     await page.getByRole('button', { exact: true, name: 'Connect' }).waitFor({ state: 'visible' })
     // A token can rotate after discovery. Each connection needs a live token,
     // rather than the one the account held when the form mounted.
     await page.evaluate(() => sessionStorage.setItem('exterior.accessToken', 'connection-token'))
     await page.getByRole('button', { exact: true, name: 'Connect' }).click()
     await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
+    assert.equal(ticketRequests, 1, 'One Connect action must request one single-use ticket')
+    assert.equal(connections, 1, 'One Connect action must open one ACP socket')
+    assert.equal(relay.registrations.length, initialEndpoints + 1, 'StrictMode must not create discarded MCP endpoints')
+    // ROOT CAUSE: the runtime hook tied a single-use agent connection to mount
+    // effects. Rebuilding its view disconnected the process behind the ticket.
+    await page.evaluate(() => window.remountAgentView())
+    await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
+    assert.equal(ticketRequests, 1, 'Remounting the view must retain the connection without requesting a replacement ticket')
+    assert.equal(connections, 1, 'Remounting the view must retain the ACP socket')
+    assert.equal(relay.registrations.length, initialEndpoints + 1, 'Remounting the view must retain the MCP endpoint')
+    assert.equal((await clients[0].listTools()).tools[0].name, 'codemode', 'The original MCP endpoint must still serve tools after remount')
     assert.ok(messages.some(message => message.method === 'session/new' && message.params.cwd === cwd), 'ACP must use the selected device directory')
     const opened = connections
     const sessions = messages.filter(message => message.method === 'session/new').length
@@ -161,8 +195,35 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     await page.getByText('This agent does not support HTTP MCP.', { exact: false }).waitFor()
     assert.equal(await page.getByRole('textbox', { name: 'Message the agent' }).count(), 0)
     assert.equal(messages.filter(message => message.method === 'session/new').length, newSessions)
+    await page.getByRole('button', { exact: true, name: 'Disconnect' }).click()
+    startupError = true
+    const beforeFailure = ticketRequests
+    await page.getByRole('button', { exact: true, name: 'Connect' }).click()
+    await page.getByText('Agent startup failed', { exact: true }).waitFor()
+    assert.equal(ticketRequests, beforeFailure + 1, 'A real startup failure must not spawn automatic replacement agents')
+    startupError = false
+    supported = true
+    await page.getByRole('button', { exact: true, name: 'Reconnect' }).click()
+    await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
+    assert.equal(ticketRequests, beforeFailure + 2, 'An explicit reconnect must request a fresh ticket')
+    await page.getByRole('button', { exact: true, name: 'Disconnect' }).click()
+    const beforeCancel = connections
+    let releaseTicket
+    pendingTicket = new Promise((resolve) => {
+      releaseTicket = resolve
+    })
+    const ticketRequested = new Promise((resolve) => {
+      notifyTicket = resolve
+    })
+    await page.getByRole('button', { exact: true, name: 'Connect' }).click()
+    await ticketRequested
+    await page.getByRole('button', { exact: true, name: 'Disconnect' }).click()
+    await page.getByRole('button', { exact: true, name: 'Connect' }).click()
+    releaseTicket()
+    await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
+    assert.equal(connections, beforeCancel + 1, 'Canceled startup must not open a socket or replace the next connection')
     assert.deepEqual(errors, [])
-    return { connectionPreserved: true, deviceDirectory: true, inspectableToolResults: true, liveAccessToken: true, newSessionBriefing: true, unsupportedAgentBlocked: true }
+    return { canceledStartup: true, connectionPreserved: true, deviceDirectory: true, inspectableToolResults: true, liveAccessToken: true, newSessionBriefing: true, singleUseTicket: true, startupFailureAndReconnect: true, strictModeViewRemount: true, unsupportedAgentBlocked: true }
   }
   catch (error) {
     // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- Only rendered text belongs in failure logs; closed protocol details can contain image data.

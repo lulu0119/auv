@@ -15,7 +15,7 @@ Count: **24**
   SDK selector mistakes, and hidden nested tool errors)
 
 - [`2026-10-25-playground-http-mcp-design.md`](2026-10-25-playground-http-mcp-design.md)
-  (Exterior-hosted HTTP MCP, browser execution ownership, connection lifetime,
+  (Exterior-hosted HTTP MCP, browser execution ownership, connections independent of React views,
   and live remote Relay evidence)
 
 - [`2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md`](2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md)

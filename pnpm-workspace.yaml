@@ -137,3 +137,6 @@ catalogs:
   vitest:
     '@vitest/coverage-v8': ^4.1.9
     vitest: ^4.1.9
+
+patchedDependencies:
+  '@hafbit/react-acp@0.1.9': patches/@hafbit__react-acp@0.1.9.patch

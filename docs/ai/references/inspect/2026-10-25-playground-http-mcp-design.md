@@ -38,11 +38,25 @@ Neither a public browser listener nor an AUV application backend is required.
 
 ## Connection lifetime
 
-Each ACP connection attempt opens its own MCP endpoint before the ACP socket starts.
-Both end together when the adapter aborts or its ACP stream closes.
-The endpoint is created inside the adapter factory: React StrictMode discards one
-connection attempt during development, and its cleanup must not close the next attempt's endpoint.
-A browser integration test reproduced that failure before the ownership change.
+The Connect action creates an `AcpThreadController` in `agent-session.ts`.
+The page owns this controller. React views subscribe to it and project its state.
+Mounting or unmounting a view does not open or close a connection.
+Disconnect and Reconnect dispose the current controller. A page reload closes its sockets.
+
+The adapter prepares the MCP endpoint before requesting the single-use ACP ticket.
+The ticket therefore does not wait for MCP setup.
+The endpoint closes when startup fails, the controller aborts, or the ACP stream closes.
+Canceled startup cannot update a replacement connection.
+
+`useAcpControllerRuntime` projects an existing controller without managing its connection.
+The local patch `patches/@hafbit__react-acp@0.1.9.patch` exposes the package's existing projection through this hook.
+Remove the patch when an upstream release exports this interface.
+
+The earlier integration used `useAcpRuntime`, which connects and disconnects from mount effects.
+Those effects could destroy the agent behind a single-use ticket during a view remount.
+Automatic ticket retries treated real startup failures as development lifecycle failures.
+The current path has no automatic ticket retry and creates the initial ACP session from the Connect action.
+StrictMode remains enabled and does not create discarded MCP endpoints.
 
 One endpoint belongs to one ACP connection, following Exterior's SDK contract.
 Agents may share supplied MCP servers between ACP sessions in the same process.
@@ -68,7 +82,12 @@ Evidence level: automated browser integration with the actual VM, SDK, and Mock 
 `node agent/verify-browser.mjs` uses a synthetic Exterior MCP wire peer and real MCP HTTP transports.
 It covers HTTP tool discovery before ACP session creation, execution, cancellation,
 timeout recovery, store rollback, retained Calls and captures, source history,
-editor isolation, StrictMode connection setup, live account token use, and unsupported-agent handling.
+editor isolation, live account token use, and unsupported-agent handling.
+The lifecycle fixture also rebuilds the entire React view under StrictMode after connection.
+It requires the same ACP socket, MCP endpoint, and single-use ticket to remain valid.
+Startup failures remain visible without automatic replacement agents. Explicit reconnect requests a fresh ticket.
+The fixture also cancels startup during the ticket request and immediately connects again.
+Only the replacement opens an ACP socket, and the canceled request cannot replace its state.
 Unit tests also exercise the MCP host with the MCP SDK's real client and linked transports.
 
 Evidence level: live remote Relay and ordinary local OpenCode 2.0.26, with model inference.

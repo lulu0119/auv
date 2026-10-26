@@ -1,7 +1,5 @@
 import type { AccountSession } from '@exterioragentprotocol/sdk/client/react'
 
-import type { AgentConnection } from './AgentSession'
-
 import { browserCallbackPath } from '@exterioragentprotocol/sdk/client'
 import { useAccount as useExteriorAccount } from '@exterioragentprotocol/sdk/client/react'
 
@@ -27,12 +25,6 @@ export async function listTargets(listDevices: AccountSession['listDevices']): P
     deviceId: device.id,
     label: `${device.hostname} / ${agent.name}`,
   })))
-}
-
-/** Exchange an Exterior target for the transport contract consumed by ACP. */
-export async function openAgentConnection(openConnection: AccountSession['openConnection'], target: AgentTarget): Promise<AgentConnection> {
-  const ticket = await openConnection({ agentName: target.agentName, deviceId: target.deviceId })
-  return { cwd: target.cwd, label: target.label, url: ticket.url }
 }
 
 // `VITE_EXTERIOR_URL` is a build-time relay origin. Use Exterior's local
