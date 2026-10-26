@@ -61,6 +61,11 @@ The library owns parsing, streamed text, and code-fence extraction.
 The local adapter applies the existing theme, scrolls wide tables, and reuses the shared clipboard helper for code copies.
 Tool protocol data and scripts remain plain text in their detail sections.
 
+Agent components use UnoCSS utilities and the Playground theme for layout, spacing, colors, and interaction states.
+Repeated disclosure and tool-output styles use shortcuts in `apps/repl-playground/uno.config.ts`.
+`apps/repl-playground/src/features/agent/markdown.css` owns the generated Markdown descendants.
+Global `styles.css` contains no Agent-specific rules.
+
 The acceptance session also exposed misleading VM guidance.
 Its `Array.map` callback worked locally, but `raw: windowClient` included SDK method functions in the value passed to `text()`.
 The shared boundary validator reported an unsupported SDK callback, which led the agent to blame `map`.
@@ -69,6 +74,10 @@ Function transport remains unsupported; execution and state rules are unchanged.
 
 ## Validation
 
+The 2026-10-26 style refactor preserves the presentation contract.
+Browser comparisons cover empty sessions, expanded tool details, screenshot dialogs, light colors, and a narrow viewport with dark colors.
+Computed layout and typography match the previous styles in all five states.
+
 The browser regression first failed against the checkpoint UI because no activity group existed.
 It exercises two completed wrappers with returned errors, an image result, and harmless text containing "errors".
 Required checks cover collapsed error visibility, screenshot access, dialog dismissal, readable scripts, and unchanged protocol status.
@@ -76,7 +85,7 @@ It also checks connection retention, session changes, and fitting the workbench 
 
 Validation passed:
 
-- All 101 unit tests across 17 files, including local map callbacks, function-bearing output, and executable help examples.
+- All 100 unit tests across 17 files, including local map callbacks, function-bearing output, and executable help examples.
 - TypeScript type checking and the Vite production build.
 - ESLint for the changed Agent source and browser harness, with no warnings.
 - The browser harness, including returned-error metadata, harmless error-related text, image decoding, dialog dismissal, and script inspection.

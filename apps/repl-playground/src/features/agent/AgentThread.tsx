@@ -10,42 +10,41 @@ import { isSandboxBriefing } from './agent-context'
 import { AgentActivity, AgentTool } from './AgentActivity'
 import { MarkdownText } from './MarkdownText'
 
-import './agent.css'
-
 /**
  * Chat over the live ACP connection: assistant messages, tool-call rows,
  * permission approvals, a composer, and new sessions. Codemode returns run
  * results directly to the agent. Run and reset also live in the editor and
- * the activity bar. Styling is the
- * playground's own; the session protocol comes from
+ * the activity bar. Styling uses the playground's UnoCSS theme;
+ * the session protocol comes from
  * `@hafbit/react-acp` and `@assistant-ui/react`, not hand-rolled.
  */
 export function AgentThread() {
   return (
-    <ThreadPrimitive.Root className="agent-thread">
+    <ThreadPrimitive.Root className="flex flex-col h-full min-h-0 min-w-0">
       <ApprovalList />
-      <div className="agent-conversation">
-        <ThreadPrimitive.Viewport className="agent-viewport">
+      <div className="flex-1 min-h-0 relative">
+        <ThreadPrimitive.Viewport className="h-full [scrollbar-gutter:stable] overflow-x-hidden overflow-y-auto">
           <ThreadPrimitive.Empty>
-            <div className="agent-empty">
-              <span aria-hidden="true" className="i-ph-cursor-click" />
-              <strong>Work with your desktop</strong>
-              <p>Describe a task. Follow the agent's progress and inspect its results here.</p>
+            <div className="text-[13px] text-fg-muted leading-[1.6] px-5 pb-2 pt-7 flex flex-col gap-2.5 items-start">
+              <span aria-hidden="true" className="i-ph-cursor-click text-[22px] text-accent" />
+              <strong className="text-[16px] text-fg">Work with your desktop</strong>
+              <p className="m-0 max-w-[36ch]">Describe a task. Follow the agent's progress and inspect its results here.</p>
             </div>
           </ThreadPrimitive.Empty>
-          <div className="agent-messages">
+          <div className="p-4 pb-5 flex flex-col gap-5">
             <ThreadPrimitive.Messages>{() => <AgentMessage />}</ThreadPrimitive.Messages>
           </div>
         </ThreadPrimitive.Viewport>
-        <ThreadPrimitive.ScrollToBottom aria-label="Jump to latest message" className="agent-jump-latest" type="button">
+        <ThreadPrimitive.ScrollToBottom aria-label="Jump to latest message" className="text-[11px] text-fg-muted px-2.5 py-1.25 border border-line rounded-[20px] bg-surface-0 flex gap-1.5 cursor-pointer shadow-[0_2px_8px_#0002] items-center bottom-3 left-1/2 absolute disabled:hidden -translate-x-1/2" type="button">
           <span className="i-ph-arrow-down" />
           Latest
         </ThreadPrimitive.ScrollToBottom>
       </div>
-      <div className="agent-composer">
-        <ComposerPrimitive.Root className="agent-composer-input">
+      <div className="px-3 pb-1.25 pt-2 border-t border-line shrink-0">
+        <ComposerPrimitive.Root className="p-2 pl-3 border border-line rounded-[10px] bg-surface-1 flex gap-2 items-end focus-within:border-accent">
           <ComposerPrimitive.Input
             aria-label="Message the agent"
+            className="text-[13px] text-fg leading-[1.5] px-0 py-0.75 outline-none bg-transparent flex-1 min-w-0 resize-none placeholder:text-fg-subtle"
             maxRows={4}
             placeholder="What would you like to do on this desktop?"
           />
@@ -60,12 +59,12 @@ export function AgentThread() {
             </ComposerPrimitive.Cancel>
           </AuiIf>
         </ComposerPrimitive.Root>
-        <div className="agent-composer-meta">
-          <span className="agent-connection-state">
-            <span />
+        <div className="text-[10.5px] text-fg-subtle pt-0.75 flex gap-2 min-w-0 items-center">
+          <span className="inline-flex gap-1.25 items-center">
+            <span className="rounded-full bg-good size-1.25" />
             Connected
           </span>
-          <span className="agent-composer-hint">Enter to send</span>
+          <span className="ml-auto">Enter to send</span>
           <AgentToolbar />
         </div>
       </div>
@@ -76,7 +75,7 @@ export function AgentThread() {
 const AgentText: TextMessagePartComponent = ({ text }) => {
   if (!text)
     return <span className="text-fg-subtle animate-pulse">●</span>
-  return <MarkdownText className="agent-md agent-text" />
+  return <MarkdownText className="text-[13px] text-fg leading-[1.75]" />
 }
 
 const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
@@ -85,7 +84,7 @@ const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
   return (
     <details className="text-[12px] text-fg-muted">
       <summary className="cursor-pointer">Reasoning</summary>
-      <MarkdownText className="agent-md leading-relaxed mt-1" />
+      <MarkdownText className="leading-relaxed mt-1" />
     </details>
   )
 }
@@ -100,8 +99,8 @@ const UserText: TextMessagePartComponent = ({ text }) => {
     )
   }
   return (
-    <div className="agent-user-message">
-      <div>{text}</div>
+    <div className="flex justify-end">
+      <div className="text-[13px] leading-[1.65] px-3.5 py-2.5 rounded-[12px_12px_3px_12px] bg-surface-2 max-w-[92%] whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
     </div>
   )
 }
@@ -111,7 +110,7 @@ function AgentMessage() {
   if (role === 'user')
     return <MessagePrimitive.Parts components={{ Text: UserText }} />
   return (
-    <div className="agent-assistant-message">
+    <div className="min-w-0">
       <MessagePrimitive.GroupedParts groupBy={groupPartByType({ 'tool-call': ['group-activity'] })} indicator="empty">
         {({ children, part }) => {
           switch (part.type) {
@@ -119,7 +118,7 @@ function AgentMessage() {
             case 'group-activity': return <AgentActivity indices={part.indices}>{children}</AgentActivity>
             case 'image': return <img alt="Agent image" className="max-w-full" src={part.image} />
             case 'indicator': return (
-              <div aria-live="polite" className="agent-thinking">
+              <div aria-live="polite" className="text-[12px] text-fg-subtle py-2 flex gap-2 items-center">
                 <span className="i-ph-circle-notch animate-spin" />
                 Thinking…
               </div>

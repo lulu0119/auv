@@ -8,7 +8,7 @@ Count: **24**
 
 - [`2026-10-25-playground-agent-ui.md`](2026-10-25-playground-agent-ui.md)
   (OpenCode desktop reference, compact Agent activity, returned errors,
-  visible screenshots, and preserved execution details)
+  visible screenshots, preserved execution details, and UnoCSS styling)
 
 - [`2026-10-25-playground-session-completeness-review.md`](2026-10-25-playground-session-completeness-review.md)
   (latest Mock test evidence, agent coverage overclaims, serial invocation guidance,

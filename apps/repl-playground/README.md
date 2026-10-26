@@ -438,6 +438,9 @@ store (zustand) ─▶ canvas, timeline, inspector, editor decorations
   time strip) and `workbench` (activity and status bars).
 - Icons are UnoCSS `presetIcons` classes from Iconify Phosphor
   (`i-ph-*`, regular weight).
+- Component styles use UnoCSS utilities, the existing theme, and shared UI
+  components. Repeated styles use shortcuts in `uno.config.ts`. The Agent's
+  `markdown.css` styles generated Markdown descendants.
 
 ## Deliberate gaps
 
