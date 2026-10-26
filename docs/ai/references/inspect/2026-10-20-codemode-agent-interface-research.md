@@ -1,13 +1,12 @@
 # Codemode agent interface research
 
-NOTICE: Local proxy citations describe a retired transport implementation.
-The [HTTP MCP migration](2026-10-25-playground-http-mcp-design.md) records the current agent connection contract.
-The current Playground tool is `execute`. Its description replaces the first-prompt briefing described below.
+The [agent execution contract](2026-10-25-playground-http-mcp-design.md) owns current Playground behavior.
 
 Source inspection date: 2026-10-20.
+The AUV section was updated on 2026-10-26 at head revision `ad315ce9d2ddefc3541f08d31ad49baf1b279643`.
 
 Evidence level: source inspection. This note makes no execution, performance, or agent task-success claims.
-Playground integration evidence is in [the implementation note](2026-10-14-playground-codemode-design.md).
+Playground integration evidence is in [the execution contract](2026-10-25-playground-http-mcp-design.md#evidence).
 
 ## Source snapshots
 
@@ -15,7 +14,7 @@ Playground integration evidence is in [the implementation note](2026-10-14-playg
 |---|---|
 | Pi | [`73f8de80bc87021375f8b525292ac07492253002`](https://github.com/earendil-works/pi/tree/73f8de80bc87021375f8b525292ac07492253002), main, inspected 2026-10-20. The [codemode package](https://github.com/earendil-works/pi/blob/73f8de80bc87021375f8b525292ac07492253002/packages/codemode/package.json#L1-L4) declares version 1.3.0. |
 | OpenCode | [`6ec56821d63100fe5bda45b759364f561c56b359`](https://github.com/anomalyco/opencode/tree/6ec56821d63100fe5bda45b759364f561c56b359), dev, inspected 2026-10-20. This note covers its V2 adapter and codemode package. |
-| AUV | [Playground source](../../../../apps/repl-playground/). Local links describe this implementation. |
+| AUV | [Playground source at ad315ce9](https://github.com/lulu0119/auv/tree/ad315ce9d2ddefc3541f08d31ad49baf1b279643/apps/repl-playground). This section describes the later HTTP MCP implementation. |
 
 ## Assessment
 
@@ -63,7 +62,7 @@ Pi can offer raw source input through a model-specific grammar.
 AUV's standard MCP tool instead accepts a JSON object with a `code` string.
 Raw source input therefore requires harness support and is not a portable ACP-client-only change.
 Sources: [Pi tool registration](https://github.com/earendil-works/pi/blob/73f8de80bc87021375f8b525292ac07492253002/packages/coding-agent/src/extensions/codemode/tool.ts#L371-L390),
-[AUV MCP schema](../../../../apps/repl-playground/agent/proxy.mjs#L54-L65).
+[AUV MCP schema](https://github.com/lulu0119/auv/blob/ad315ce9d2ddefc3541f08d31ad49baf1b279643/apps/repl-playground/src/features/agent/codemode-bridge.ts).
 
 ## OpenCode V2 source findings
 
@@ -198,83 +197,27 @@ cached per inventory. Per-program execution state is fresh.
 [`cancellation`](https://github.com/anomalyco/opencode/blob/6ec56821d63100fe5bda45b759364f561c56b359/packages/core/src/session/runner/step.ts#L140-L152),
 [`extension promise wrapping`](https://github.com/anomalyco/opencode/blob/6ec56821d63100fe5bda45b759364f561c56b359/packages/codemode/src/interpreter/extensions.ts#L139-L159).
 
-## AUV source findings
+## AUV comparison
 
-The app-owned MCP proxy registers one `codemode({ code, timeoutMs })` tool.
-It sends reverse `_auv/codemode` requests over the existing ACP connection.
-The client owns execution, session state, cancellation, and results.
-Sources: [MCP proxy](../../../../apps/repl-playground/agent/proxy.mjs#L54-L91),
-[client execution](../../../../apps/repl-playground/src/features/agent/codemode-bridge.ts#L20-L71).
+AUV exposes SDK resource methods rather than a generic JSON tool catalog.
+For example, `WindowClient` retains methods after it crosses the VM boundary.
+The generated help describes ergonomic SDK calls, including positional arguments and returned resource objects.
+Runner discovery instead describes lower-level RPC contracts.
 
-The compiler erases TypeScript syntax and instruments ordinary JavaScript.
-Enums, namespaces, and constructor parameter properties are unsupported.
-The execution compiler does not run the language service's semantic diagnostics.
-Sources: [compiler](../../../../apps/repl-playground/src/stepper/compile.ts#L81-L105),
-[language worker](../../../../apps/repl-playground/src/workers/language.worker.ts#L40-L51).
+| Boundary | AUV choice |
+| --- | --- |
+| Agent interface | One `execute({ code, timeoutMs? })` MCP tool through Exterior HTTP MCP. |
+| Language | Erasable TypeScript syntax, compiled to instrumented JavaScript without per-script type checking. |
+| Execution | A temporary worker and fresh QuickJS context; the editor retains its own worker. |
+| Discovery | `api.help`, `api.search`, and `api.describe`, generated from SDK declarations. |
+| Results | Explicit text/image content and `isError`; detailed SDK Calls stay in the timeline. |
 
-The execution host creates a temporary worker and preserves the editor worker.
-Each tool call creates a QuickJS context with a 64 MiB guest memory limit.
-Only supplied host functions cross into that context.
-Sources: [worker lifecycle](../../../../apps/repl-playground/src/runtime/session.ts#L153-L181),
-[worker cleanup](../../../../apps/repl-playground/src/runtime/session.ts#L250-L264),
-[VM setup](../../../../apps/repl-playground/src/workers/codemode.ts#L15-L26).
+The [execution contract](2026-10-25-playground-http-mcp-design.md) owns current limits, state rules, connection lifetime, and integration evidence.
+This comparison provides source evidence without performance or agent task benchmarks.
 
-AUV proxies SDK functions and returned objects into the VM.
-This preserves resource methods on `WindowClient`.
-Callbacks and async iterators currently fail explicitly.
-Sources: [value conversion](../../../../apps/repl-playground/src/workers/codemode.ts#L69-L117),
-[SDK signatures](../../../../js/packages/sdk/src/apis/auv/driver.ts#L200-L220),
-[window methods](../../../../js/packages/sdk/src/apis/auv/driver.ts#L269-L286).
-
-The first prompt contains environment instructions and starter SDK signatures.
-The VM supplies `api.help()`, `api.search(...)`, and `api.describe(...)`.
-Their JSON catalog comes from the SDK TypeScript declarations and documentation.
-Sources: [former briefing](https://github.com/lulu0119/auv/blob/4596f0ce8010c4bdbaec984526ac025d4eb75617/apps/repl-playground/src/features/agent/agent-context.ts),
-[catalog generation](../../../../apps/repl-playground/agent/help-catalog.ts),
-[metadata queries](../../../../apps/repl-playground/src/script-api/codemode-help.ts).
-
-The SDK already exposes method identifiers, input/output schemas, effects, presentation metadata, and method documentation.
-These records describe RPCs.
-They do not directly describe ergonomic SDK calls such as `win.findText(query, options)`.
-That method supplies a window reference and transforms its arguments before the RPC.
-Sources: [discovery contracts](../../../../js/packages/sdk/src/apis/auv/discover.ts#L16-L88),
-[method documentation](../../../../js/packages/sdk/src/apis/auv/discover.ts#L274-L310),
-[SDK argument conversion](../../../../js/packages/sdk/src/apis/auv/driver.ts#L482-L488).
-
-The MCP result contains text/image content and `isError`.
-Execution status and failure location appear in a human-readable final text item.
-The public MCP response exposes content and `isError`; execution outcomes stay inside the host.
-Source: [result construction](../../../../apps/repl-playground/src/features/agent/codemode-bridge.ts#L38-L57).
-
-## Playground agent interface
-
-The MCP tool description and first prompt explain the help interface.
-The agent can discover methods inside a script:
-
-```ts
-text(api.help())
-text(api.search({ query: "window text", limit: 5 }))
-text(api.describe({ path: "WindowClient.findText" }))
-```
-
-Search returns a bounded set of exact paths, short descriptions, and call signatures.
-Detailed help returns the exact SDK signature, required type definitions, output fields, examples, and known execution limits.
-Queries are synchronous and do not call the device.
-Related type names are valid describe paths.
-Search omits methods that need callbacks or async iterators.
-An exact describe query explains those execution restrictions.
-
-SDK declarations supply positional arguments, returned resource methods, and SDK parameter conversions.
-RPC method documentation describes lower-level contracts and effects.
-The help catalog describes the script interface; platform support depends on the selected device.
-
-The execution result contains selected text/image output and execution status.
-It preserves partial output after a failure or cancellation.
-The timeline retains SDK calls and their intermediate results.
-Successful execution and delivered input remain separate from semantic task success.
-
-## Research limits
-
-The upstream comparison provides source evidence, without performance or agent task benchmarks.
-Automated Playground checks cover discovery, executable help examples, protocol handling, and browser execution.
-See the [implementation note](2026-10-14-playground-codemode-design.md) for their scope and evidence.
+Sources at the inspected AUV revision:
+[MCP host](https://github.com/lulu0119/auv/blob/ad315ce9d2ddefc3541f08d31ad49baf1b279643/apps/repl-playground/src/features/agent/codemode-bridge.ts),
+[VM](https://github.com/lulu0119/auv/blob/ad315ce9d2ddefc3541f08d31ad49baf1b279643/apps/repl-playground/src/workers/codemode.ts),
+[help catalog](https://github.com/lulu0119/auv/blob/ad315ce9d2ddefc3541f08d31ad49baf1b279643/apps/repl-playground/agent/help-catalog.ts),
+[SDK resource methods](https://github.com/lulu0119/auv/blob/ad315ce9d2ddefc3541f08d31ad49baf1b279643/js/packages/sdk/src/apis/auv/driver.ts),
+[Runner discovery](https://github.com/lulu0119/auv/blob/ad315ce9d2ddefc3541f08d31ad49baf1b279643/js/packages/sdk/src/apis/auv/discover.ts).

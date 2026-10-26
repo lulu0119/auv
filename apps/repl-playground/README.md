@@ -44,10 +44,10 @@ controlled desktop.
   (`createMockTransport` from `@auv-js/sdk`): it answers the same Runner RPCs
   as a device, so scripts, the timeline and replay behave the same on it.
 - **Agent / Script tabs**: share the center panel. Sign in with Exterior and
-  connect a codemode agent. Tab switches retain the connection and editor.
+  connect an ACP agent. Tab switches retain the connection and editor.
   Through Exterior's HTTP MCP endpoint, the agent calls `execute` to execute code
   against the selected Device or mock desktop. Explicit output returns to the
-  agent; SDK calls appear in the timeline. Connections require codemode.
+  agent; SDK calls appear in the timeline. Connections require HTTP MCP support.
   A new connection starts a fresh agent process; disconnect ends it.
   The chat is not persisted. For a remote relay, set `VITE_EXTERIOR_URL`
   at build time.
@@ -245,7 +245,7 @@ the pixels in when they load.
 Playground helper types (`Area`, `AreaEdges`, `Rect`, `Point`, …) can be used
 by name in cells, e.g. `function toolbar(win: Area): Area`.
 
-## Agent codemode
+## Agent execution
 
 The playground supplies its own code tool to an ACP agent. Pi is not required.
 The browser opens an HTTP MCP endpoint through Exterior's `serveMcp` SDK.
@@ -323,28 +323,13 @@ Before release, publish the metadata document and use its address as the client 
 People authorize the app again under that identity.
 The local page and the published page then use the same identity.
 
-From this checkout, the equivalent command is:
-
-```sh
-pnpm -F @auv-js/repl-playground agent:proxy -- <ACP executable> <arguments>
-```
-
-In the Agent tab, select that slot. **Code execution connected** appears after
-the agent advertises ACP MCP support. The agent can then execute code and read
-its output directly.
-Connections without ACP MCP support show a setup message and cannot
-start a chat.
-
-Exterior is a concrete connection adapter in `src/features/agent/exterior.ts`.
-It owns OAuth callback configuration, device discovery, and connection tickets.
-The adapter uses `session.listDevices()` and `session.openConnection()`.
-The SDK obtains live tokens and shares concurrent refreshes for these calls.
-It converts a ticket into `{ url, label, cwd }` for the ACP session.
-The `cwd` comes from the agent device's `workingDirectory`.
-The ACP client, HTTP adapter, execution worker, and API help remain Playground-owned.
+In the Agent tab, select the agent and click **Connect**.
+Agents without HTTP MCP support show a setup message and cannot start a chat.
+The connection belongs to the page. React views subscribe to it.
+Connect and Disconnect control its lifetime. View remounts do not reconnect it.
 The agent device and the selected AUV device can be different computers.
 
-The tool description and the first prompt explain the help interface. Help is
+The tool description explains the help interface. Help is
 generated from the same SDK declarations that the scripts call:
 
 ```ts
@@ -360,8 +345,9 @@ argument and return types, source documentation, and examples for common tasks.
 `WindowClient` names the object returned by `auv.windows.resolve/get/list/from`.
 It is not a global constructor. Help queries do not call the device.
 
-Callbacks, stream controllers, and async iterators remain unavailable in the
-VM. Search omits those methods. An exact `api.describe` query explains the
+SDK callbacks, stream controllers, and async iterators cannot cross the VM
+boundary. Local callbacks such as `Array.map` work. Search omits unsupported
+SDK methods. An exact `api.describe` query explains the
 restriction. Help describes the SDK contract. A device can still reject an
 unsupported platform operation.
 
@@ -382,9 +368,13 @@ Node globals. Scripts receive `auv`, SDK constants and geometry helpers,
 The editor retains its own REPL variables.
 
 `store/load` retains up to 64,000 characters of JSON in the current ACP session.
-Successful calls commit state. Failed or canceled calls retain the committed
-state. Save IDs rather than SDK clients. For example, use
+The host commits returned state only after an `ok` outcome with no cancellation.
+Failure and cancellation preserve the committed state. Session replacement clears it.
+Save IDs rather than SDK clients. For example, use
 `await auv.windows.get(load('counterId'))` in a later call.
+
+The host rejects overlapping calls while its own invocation or the shared execution session is active.
+It does not queue or retry busy calls. The caller waits for completion before the next call.
 
 Only explicit output and errors return to the agent. Text output has a
 16,000-character limit. `await image(capture)` fetches a PNG bounded to
@@ -402,9 +392,9 @@ Agent code appears in the editor for inspection. Use the agent to rerun it.
 Run, stepping, replay and editor types use the editor REPL
 environment, which does not supply codemode helpers.
 
-Evidence level: automated protocol integration and a browser mock Runner test.
-Live Exterior authentication and an LLM agent were not exercised. See the
-[implementation and evidence](../../docs/ai/references/inspect/2026-10-14-playground-codemode-design.md).
+The [current execution contract and evidence](../../docs/ai/references/inspect/2026-10-25-playground-http-mcp-design.md)
+separate automated Mock Runner coverage from earlier live OpenCode and remote Relay evidence.
+The renamed `execute` interface has automated coverage, with no new live model run.
 
 ## Architecture
 
@@ -479,13 +469,13 @@ These are known and intentionally deferred; each is marked in code.
   keep the REPL on a local origin.
 - **Agent tab**: `exterior.ts` adapts sign-in, devices, and tickets from
   `@exterioragentprotocol/sdk`. The package uses an immutable preview revision.
-  See the [EAP SDK migration](../../docs/ai/references/inspect/2026-10-23-exterior-eap-sdk-migration.md)
+  See the [Exterior connection contract](../../docs/ai/references/inspect/2026-10-25-playground-http-mcp-design.md#exterior-connection)
   for client identities, local development, and live verification limits.
   The thread uses `@hafbit/react-acp` hooks. Sessions are ephemeral.
   There is no directory picker or session list; the device supplies the directory.
   Old sessions linger in the host agent process until disconnect.
   Agent browser-auth (`auth-required`) has no UI yet.
-  Codemode negotiation is required before the session starts.
+  The agent must advertise HTTP MCP support before session creation.
   SDK callbacks and iterators remain deferred (`NOTICE(codemode-callbacks)`).
   An explicit reconnect obtains a fresh ticket after a failed connection.
 - `const` at the top level becomes reassignable across cells (same as

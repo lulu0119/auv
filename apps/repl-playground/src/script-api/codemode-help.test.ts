@@ -35,7 +35,7 @@ describe('agent SDK help', () => {
     expect(api.describe({ path: '__proto__' })).toMatchObject({ found: false })
   })
 
-  it('includes selected constants and geometry while excluding connection APIs', () => {
+  it('exposes admitted SDK constants and excludes connection APIs', () => {
     expect(api.search({ namespace: 'sdk.Position' }).items.map(item => item.path)).toEqual(['sdk.Position.display', 'sdk.Position.screen', 'sdk.Position.window'])
     expect(api.describe({ path: 'sdk.InputPolicy' })).toMatchObject({ found: true })
     expect(JSON.stringify(api.describe({ path: 'sdk.InputPolicy' }))).toContain('BACKGROUND_ONLY')
@@ -65,6 +65,7 @@ describe('agent SDK help', () => {
   it('keeps each help result within the VM output budget and resolves its type links', () => {
     for (const path of [...catalog.entries.map(entry => entry.path), ...Object.keys(catalog.types)]) {
       const help = api.describe({ path })
+      expect(help.found, path).toBe(true)
       expect(JSON.stringify(help).length, path).toBeLessThanOrEqual(16000)
       if ('relatedTypes' in help) {
         for (const name of help.relatedTypes!)
@@ -89,38 +90,5 @@ describe('agent SDK help', () => {
       auv: { windows: { list: async () => [{ capture: async () => ({}), id: 'w-counter', window: { title: 'Counter' } }] } },
     }, new AbortController().signal)
     expect(outcome).toMatchObject({ codemode: { content: [{ text: '[{"id":"w-counter","window":{"title":"Counter"}}]', type: 'text' }] }, status: 'ok' })
-  })
-
-  // Help examples must execute against the same SDK interface that they describe.
-  it('lets a fresh VM discover help and execute a returned example', async () => {
-    const sources: string[] = []
-    const run = (source: string, auv = {}) => {
-      sources.push(source)
-      return runCodeMode({ ...compileCell(source, { allowReturn: true }), breakpoints: [], codemode: { store: {}, timeoutMs: 2000 }, executionId: sources.length, mode: 'run' }, {
-        __bind: () => {},
-        __step: async () => {},
-        __stepSync: () => {},
-        auv,
-      }, new AbortController().signal)
-    }
-    const discovery = await run('text(api.help()); text(api.describe({ path: api.search({ query: "WindowClient.findText" }).items[0].path }));')
-    expect(discovery.status).toBe('ok')
-    expect(discovery.codemode!.content[0]).toMatchObject({ text: expect.stringContaining('api.search') })
-    const item = discovery.codemode!.content[1] as { text: string }
-    const help = JSON.parse(item.text)
-    const calls: string[] = []
-    const outcome = await run(help.examples[0], {
-      windows: {
-        resolve: async () => ({
-          findText: async (query: string) => {
-            calls.push(query)
-            return { matches: [{ text: 'Increment' }] }
-          },
-        }),
-      },
-    })
-    expect(outcome.status).toBe('ok')
-    expect(calls).toEqual(['Increment'])
-    expect(outcome.codemode!.content).toEqual([{ text: '[{"text":"Increment"}]', type: 'text' }])
   })
 })

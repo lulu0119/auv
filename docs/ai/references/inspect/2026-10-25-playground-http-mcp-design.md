@@ -1,30 +1,40 @@
-# Playground standard HTTP MCP
+# Playground agent execution contract
 
-Status: implemented with Exterior's relay-hosted MCP endpoints.
-The owner approved this route after Exterior PR #44 merged and deployed.
-This is an approved transport migration; VM execution and recording retain their existing contract.
+Status: implemented.
+This note defines the MCP interface, connection lifetime, execution rules, and evidence limits.
+`codemode` names the internal execution mechanism. The MCP tool name is `execute`.
+The [Playground README](../../../../apps/repl-playground/README.md#agent-execution) contains setup instructions and script examples.
 
-## Current contract
+## Exterior connection
 
-The Playground uses `@exterioragentprotocol/sdk` at immutable revision
-`aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e`.
-A connection attempt calls `serveMcp` with a live account access token.
-Exterior returns an agent-reachable HTTP MCP URL and its authorization headers.
+The Playground uses `@exterioragentprotocol/sdk` at revision `aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e`.
+[`exterior.ts`](../../../../apps/repl-playground/src/features/agent/exterior.ts) adapts account access, device discovery, and callback configuration.
+Exterior owns authorization, token refresh, HTTP MCP transport, endpoint credentials, and relay cleanup.
+AUV owns the selected execution device, Mock desktop, session store, and timeline.
+
+`VITE_EXTERIOR_URL` selects the relay origin. The default is `http://127.0.0.1:8787`.
+The default client identity is `https://auv.moeru.ai/playground/oauth-client.json`.
+The build includes [the metadata document](../../../../apps/repl-playground/public/oauth-client.json), which needs publication at that HTTPS address.
+A registered `VITE_EXTERIOR_CLIENT_ID` supports local development before publication.
+The callback follows the application base path: `/playground/oauth/callback`.
+App registration and account authorization are separate steps.
+
+The account SDK supplies live tokens through its account methods.
+`listTargets` maps each device's agents to selectable targets and retains the device's working directory.
+The agent device and selected AUV Device are independent.
+
+The Connect action creates a page-owned `AcpThreadController` in [`agent-session.ts`](../../../../apps/repl-playground/src/features/agent/agent-session.ts).
+React views subscribe to this controller.
+Disconnect and Reconnect dispose it. A page reload closes its sockets.
+StrictMode view remounts retain the existing connection.
+
+Startup prepares the MCP endpoint with `serveMcp`, then requests the single-use ACP ticket.
 The page connects a fresh MCP SDK `Server` for each MCP session.
-`CodeModeHost` owns the tool definition, execution, cancellation, and session store.
+The endpoint closes after failed startup, controller cancellation, or ACP connection closure.
+Canceled startup cannot update a replacement connection. Startup failures require explicit reconnect.
 
-The page exposes one MCP tool, `execute({ code, timeoutMs? })`.
-Its description supplies execution rules and SDK discovery instructions.
-Scripts use `api.help()`, `api.search()`, and `api.describe()` for detailed SDK help.
-The earlier `codemode` tool name is replaced without an alias.
-ACP user prompts pass through unchanged. No first-prompt briefing or per-session briefing state remains.
-
-This follows OpenCode's separation of the `execute` interface from its internal Code Mode implementation.
-See [OpenCode's tool documentation](https://opencode.ai/v2/docs/tools#execute).
-OpenCode can still wrap this MCP tool in its own `execute` call.
-Its tool orchestration and the page's device execution have separate ownership.
-
-The ACP `session/new` request receives:
+The agent must advertise `agentCapabilities.mcpCapabilities.http`.
+ACP `session/new.mcpServers` receives:
 
 ```ts
 {
@@ -35,118 +45,157 @@ The ACP `session/new` request receives:
 }
 ```
 
-The agent must advertise `agentCapabilities.mcpCapabilities.http`.
 Tool discovery can finish before ACP session creation returns.
-Execution requires an active Playground ACP session.
-The MCP SDK handles initialization, tool requests, and cancellation notifications.
-Host tests send ordinary MCP tool requests through linked transports.
-Execution is private, and the host resolves its active ACP session internally.
-The browser no longer handles experimental `mcp/message` requests.
-The agent device runs its ordinary ACP agent, without a Playground startup wrapper.
-
-`codeModeConnection` adapts the typed `AcpClientConnection` interface.
-It supplies the MCP endpoint through `newSession` and forwards cancellation.
+The agent runs its ordinary ACP command.
+The typed `codeModeConnection` adapter supplies the endpoint through `newSession` and forwards cancellation.
 The ACP SDK owns message parsing and request matching.
 The controller owns negotiated capabilities, connection errors, and active-session selection.
-Session creation updates controller state directly; the Playground does not refresh an unused session list.
 
-Exterior owns endpoint credentials, HTTP transport, browser routing, and relay cleanup.
-AUV owns the tool and its selected device, Mock desktop, store, and timeline.
-The Playground remains a static deployment, including its current assets-only Worker.
-Neither a public browser listener nor an AUV application backend is required.
+One endpoint belongs to one ACP connection.
+Agents can share that endpoint across sessions, so the host binds execution to its active ACP session.
+The local [React ACP patch](../../../../patches/@hafbit__react-acp@0.1.9.patch) exposes `useAcpControllerRuntime` without connection lifecycle effects.
+An upstream release that exports this interface can replace the patch.
 
-## Connection lifetime
+## MCP tool
 
-The Connect action creates an `AcpThreadController` in `agent-session.ts`.
-The page owns this controller. React views subscribe to it and project its state.
-Mounting or unmounting a view does not open or close a connection.
-Disconnect and Reconnect dispose the current controller. A page reload closes its sockets.
+The page exposes `execute({ code, timeoutMs? })`.
+Its description supplies execution rules and SDK discovery instructions.
+ACP user prompts pass through unchanged.
 
-The adapter prepares the MCP endpoint before requesting the single-use ACP ticket.
-The ticket therefore does not wait for MCP setup.
-The endpoint closes when startup fails, the controller aborts, or the ACP connection closes.
-Canceled startup cannot update a replacement connection.
+| Parameter | Advertised input | Runtime check |
+| --- | --- | --- |
+| `code` | Required string, length 1–100,000. | A nonblank string with JavaScript `length` at most 100,000. |
+| `timeoutMs` | Optional integer, 1–120,000. Default: 30,000. | The same range and integer check. A missing or null value uses 30,000. |
 
-`useAcpControllerRuntime` projects an existing controller without managing its connection.
-The local patch `patches/@hafbit__react-acp@0.1.9.patch` exposes the package's existing projection through this hook.
-Remove the patch when an upstream release exports this interface.
+The low-level MCP `Server` handles protocol requests. It does not apply the advertised tool schema automatically.
+[`CodeModeHost`](../../../../apps/repl-playground/src/features/agent/codemode-bridge.ts) separately checks arguments before execution.
+The schema declares `additionalProperties: false`; the runtime guard checks only `code` and `timeoutMs`.
 
-The earlier integration used `useAcpRuntime`, which connects and disconnects from mount effects.
-Those effects could destroy the agent behind a single-use ticket during a view remount.
-Automatic ticket retries treated real startup failures as development lifecycle failures.
-The current path has no automatic ticket retry and creates the initial ACP session from the Connect action.
-StrictMode remains enabled and does not create discarded MCP endpoints.
+Scripts receive `auv`, admitted `sdk` helpers, `api`, `text`, `image`, and `store/load`.
+The SDK declaration catalog supplies `api.help()`, `api.search()`, and `api.describe()`.
+These synchronous queries make no device calls.
+Search returns paths and signatures. Detailed help returns types, examples, and restrictions.
+Related type names also work as describe paths.
+Numeric SDK enums retain their values.
 
-One endpoint belongs to one ACP connection, following Exterior's SDK contract.
-Agents may share supplied MCP servers between ACP sessions in the same process.
-The Playground therefore binds execution to its active session and resets its JSON store on session replacement.
-Request cancellation combines the MCP request signal with the active execution signal.
-Signals belong to individual invocations, so cancellation cannot affect a call from another transport with the same request id.
+MCP results contain text/image `content` and `isError`.
+Only explicit output and execution status return to the agent; partial output survives failure and cancellation.
+The final text item describes completion, failure, cancellation, or timeout.
+The interface does not expose internal `RunOutcome` metadata.
 
-The migration preserves these execution rules:
+OpenCode can wrap the MCP call in its own execution tool.
+Its wrapper status and nested Playground status are distinct.
+The [Agent UI](2026-10-25-playground-agent-ui.md) retains both.
+The [interface research](2026-10-20-codemode-agent-interface-research.md) compares these execution models.
 
-- A call gets fresh VM variables.
-- Calls, screenshots, outputs, and full statement and binding history append across calls.
-- The Mock desktop remains active across calls.
-- Successful calls commit the JSON store; failed or canceled calls do not.
-- SDK input already delivered is not rolled back.
-- One mutable desktop runs one script at a time.
-- The editor keeps its separate REPL state.
+## Execution and state
 
-`ExecSession` keeps the editor worker until Reset.
-Each codemode call owns a temporary worker, RPC connection, and SDK port.
-Cleanup closes those temporary resources after success, failure, cancellation, or timeout.
-The active worker determines whether a script is running and which execution receives control commands.
+Execution requires an active ACP session.
+The host rejects calls when its `#active` invocation exists or the shared `session.running` getter returns true.
+The shared check also covers editor execution. `ExecSession.run` rejects calls while a worker is active.
+Busy calls return an error. There is no queue or automatic retry.
 
-The VM validates each store update before replacing its local state.
-It returns the state only after success, so the input store remains unchanged.
+[`ExecSession`](../../../../apps/repl-playground/src/runtime/session.ts) keeps the editor worker until Reset.
+Each agent call owns a temporary worker, RPC connection, and SDK port.
+Cleanup closes these resources after success, failure, cancellation, or timeout.
+Each call creates a fresh QuickJS/WASM context with a 64 MiB guest memory limit.
+The guest has no filesystem, network, browser, or Node globals.
+SDK methods remain callable on returned objects, including `WindowClient`.
 
-Streaming tool progress, SDK callbacks, and async iterators remain deferred at their existing code markers.
-Complete script recording retains the previously documented CPU-loop cost.
+The VM clones the committed JSON store and validates each local update.
+The host commits candidate state only after an `ok` outcome without cancellation.
+Failure, timeout, and cancellation preserve the committed store.
+Session replacement cancels the invocation and clears the store.
+
+Request cancellation combines the MCP request signal with the active invocation signal.
+Each request has its own signal, including requests with equal IDs on different transports.
+Delivered device input remains effective after failure or cancellation.
+
+Calls, captures, output, and full statement and binding history append across agent invocations.
+Event positions increase across calls.
+Each SDK call retains its source script and line offset.
+A metadata-only call preserves the latest capture.
+
+The editor retains separate REPL variables; editor bindings and line highlights exclude other scripts.
+An editor run starts a separate timeline.
+These rules do not provide persistent chat or replay of an entire agent session.
+
+## Limits and Mock behavior
+
+The compiler erases TypeScript syntax without type checking each script.
+SDK calls require the documented argument shapes.
+Protobuf encoding can omit unknown fields, so an incorrect selector can reach the default display.
+Any stricter validation belongs at the shared SDK serialization boundary.
+
+SDK callbacks and async iterators cannot cross the VM boundary.
+Local callbacks such as `Array.map` work.
+Function-bearing SDK clients cannot pass through `text()` or the JSON store; output their IDs and metadata instead.
+The editor displays agent source for inspection. Manual Run, stepping, and replay use the editor REPL environment.
+Streaming tool progress and editor execution of agent scripts remain deferred at their code markers.
+
+`image(capture)` accepts an AUV capture reference and fetches bounded pixels on the host.
+Pixels stay outside the VM and session store.
+SDK help describes call contracts; the selected device determines platform support.
+Script completion proves execution. Application state must establish semantic success.
+
+The Mock Runner implements selected desktop behavior:
+
+| Operation | Behavior |
+| --- | --- |
+| Region capture | Non-finite coordinates or non-positive dimensions return `INVALID_ARGUMENT` (3). |
+| Keyboard | Text typing and pasting work. Key presses support Return/Enter; other keys and shortcuts return `UNIMPLEMENTED` (12). |
+| Keyboard validation | Empty sequences, empty key combinations, and missing actions return `INVALID_ARGUMENT` (3). All actions pass validation before delivery. |
+| Text search | An empty trimmed query returns no matches. |
+
+These checks do not establish native platform capabilities.
+Complete statement recording also adds CPU-loop overhead.
+A million-iteration browser loop exceeded its ten-second deadline in the recorded probe.
+The normal browser harness excludes this performance case.
+The optional `AUV_CODEMODE_BENCHMARK=1` probe reproduces it.
+It is not a passing performance guarantee.
 
 ## Evidence
 
-Evidence level: automated browser integration with the actual VM, SDK, and Mock Runner.
-`node agent/verify-browser.mjs` uses a synthetic Exterior MCP wire peer and real MCP HTTP transports.
-It covers HTTP tool discovery before ACP session creation, execution, cancellation,
-timeout recovery, store rollback, retained Calls and captures, source history,
-editor isolation, live account token use, and unsupported-agent handling.
-The lifecycle fixture also rebuilds the entire React view under StrictMode after connection.
-It requires the same ACP socket, MCP endpoint, and single-use ticket to remain valid.
-Startup failures remain visible without automatic replacement agents. Explicit reconnect requests a fresh ticket.
-The fixture also cancels startup during the ticket request and immediately connects again.
-Only the replacement opens an ACP socket, and the canceled request cannot replace its state.
-Unit tests also exercise the MCP host with the MCP SDK's real client and linked transports.
+Evidence level: automated browser integration with QuickJS, the actual SDK, Mock Runner, synthetic Exterior/ACP peers, and real MCP HTTP transports.
+The [browser harness](../../../../apps/repl-playground/agent/verify-browser.mjs) checks:
 
-The 2026-10-26 simplification passed all 101 unit tests, TypeScript checking, the production build, changed-file ESLint, and the browser harness.
-The unit tests use the real ACP adapter and controller for session setup, user prompts, cancellation, and connection cleanup.
-The browser harness also rejects session-list requests when the agent does not advertise that capability.
+- Tool discovery before session creation and execution without a device for pure code and SDK help.
+- Returned help examples against the actual SDK, display selection, large arrays, and bounded image output.
+- Cancellation, timeout recovery, store rollback, retained captures, source history, and editor isolation.
+- Connection retention across StrictMode remounts, canceled startup, explicit reconnect, and unsupported-agent handling.
+- Unchanged user prompts in first and later sessions, current account-token use, and inspectable tool results.
 
-The interface and worker ownership refactor also passes these checks.
-The browser harness cancels codemode through Reset and resumes an editor step afterward.
-The editor variable survives failures, cancellation, Reset during codemode, and timeout.
+Host unit tests use the MCP SDK client and linked transports.
+They replace worker execution to check admission, store commits, and cancellation decisions.
+State tests inspect the next invocation's input store.
+VM tests run the compiler and QuickJS with supplied host functions to check marshalling and execution rules.
+Mock tests check capture errors, keyboard validation before effects, and empty text queries.
 
-The `execute` interface simplification passes the same 101 tests, typecheck, build, changed-file ESLint, and browser harness.
-Tool discovery supplies instructions before session creation. First and later sessions send user prompts unchanged.
-This check uses the synthetic ACP peer and Mock Runner; the renamed interface has no new live model evidence.
+Validation passed: 108 Playground tests, Playground typecheck, changed-file ESLint, the browser harness, and 21 SDK capture regressions.
+Run the checks from the repository root:
 
-Evidence level: live remote Relay and ordinary local OpenCode 2.0.26, with model inference.
-The actual Playground page connected to `https://relay.apps.superpowerlulu.win`.
-The agent completed two codemode calls through the deployed endpoint:
-the first clicked the Mock Counter, stored a marker, and emitted a screenshot;
-the second read that marker, reported the first call's variable as undefined,
-and emitted a second marker. The page retained five SDK Calls and all five output entries.
-This verifies browser execution through the remote Relay, not a physical desktop workflow.
-An agent on a separate physical device was not tested.
+```sh
+pnpm -F @auv-js/repl-playground test:run
+pnpm -F @auv-js/repl-playground typecheck
+pnpm -F @auv-js/repl-playground test:browser
+pnpm --filter @auv-js/sdk exec vitest run src/apis/auv/driver.test.ts --project node
+git diff --check
+```
 
-The local Exterior CLI was reinstalled from the same immutable revision and its daemon restarted.
-Existing device identity and saved sign-in were retained.
-The ordinary `opencode` slot remains; the obsolete `auv-playground` wrapper slot was removed.
+The local SDK typecheck resolves TypeScript 5.4.5.
+It reports three `AbortSignal.any` errors and one `readline` type error at both the PR base and head.
+The base check uses source revision `739fe399311ae72b77ffeea530b231c3bb6c34ea`, with the same installed dependencies and generated bindings.
+Explicit TypeScript 6.0.3 checks pass for both revisions. The default SDK command still fails.
+
+Evidence level: a live remote Relay probe with ordinary local OpenCode 2.0.26 and model inference.
+The page connected through `https://relay.apps.superpowerlulu.win` to the Mock desktop.
+Two calls checked a Counter click, screenshot output, retained store data, and fresh variables.
+This probe used the tool name `codemode`; the current `execute` name has automated coverage only.
+It does not establish physical desktop behavior, cross-device agent support, or complete SDK coverage.
 
 ## Sources
 
-- [Exterior PR #44](https://github.com/lulu0119/exterior/pull/44)
 - [Exterior SDK serving tools](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/packages/sdk/README.md#serving-tools-to-an-agent)
-- [Exterior decision](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/docs/adr/0030-a-web-app-serves-mcp-through-the-relay.md)
+- [Exterior endpoint ownership](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/docs/adr/0030-a-web-app-serves-mcp-through-the-relay.md)
+- [Exterior app setup](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/docs/app-setup.md)
 - [ACP MCP server configuration](https://agentclientprotocol.com/protocol/v1/session-setup#mcp-servers)
-- [Earlier codemode diagnosis](2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md)

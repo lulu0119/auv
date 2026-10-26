@@ -304,6 +304,7 @@ async function verifyBrowser() {
     try {
       const pure = await client.callTool({ arguments: { code: 'text(api.help().limits.memoryMiB); return 2;' }, name: 'execute' })
       assert.equal(pure.isError, false, `Pure code and API help must work before a device is ready: ${JSON.stringify(pure)}`)
+      assert.deepEqual(pure.content.filter(item => item.type === 'text').slice(0, 2).map(item => item.text), ['64', '2'])
       const missing = await client.callTool({ arguments: { code: 'await auv.windows.list();' }, name: 'execute' })
       assert.equal(missing.isError, true)
       assert.match(missing.content.at(-1).text, /needs a device/)
@@ -398,6 +399,7 @@ async function verifyBrowser() {
     await page.evaluate(() => window.codemodeHost.cancel())
     const canceledResult = await canceled
     assert.equal(canceledResult.isError, true)
+    assert.match(canceledResult.content.at(-1).text, /canceled/)
     assert.ok(canceledResult.content.some(item => item.type === 'text' && item.text === 'waiting'), JSON.stringify(canceledResult))
     const reset = client.callTool({ arguments: { code: 'text("reset waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'execute' })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('reset waiting')))
@@ -414,6 +416,7 @@ async function verifyBrowser() {
     assert.match(loop.content.at(-1).text, /timed out|interrupted/)
     const recovered = await client.callTool({ arguments: { code: 'return 7;' }, name: 'execute' })
     assert.equal(recovered.isError, false)
+    assert.ok(recovered.content.some(item => item.type === 'text' && item.text === '7'), 'The VM must execute new code after timeout cleanup')
     const allocation = await client.callTool({ arguments: { code: 'const values = new Array(1000000).fill("x"); text(values.length);' }, name: 'execute' })
     assert.equal(allocation.isError, false, JSON.stringify(allocation))
     assert.ok(allocation.content.some(item => item.text === '1000000'))

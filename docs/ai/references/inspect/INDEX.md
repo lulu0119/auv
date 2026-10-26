@@ -2,7 +2,7 @@
 
 AUV tracing, run storage, artifact delivery, and inspect viewer contracts
 
-Count: **24**
+Count: **18**
 
 ## Current
 
@@ -10,37 +10,13 @@ Count: **24**
   (OpenCode desktop reference, compact Agent activity, returned errors,
   visible screenshots, preserved execution details, and UnoCSS styling)
 
-- [`2026-10-25-playground-session-completeness-review.md`](2026-10-25-playground-session-completeness-review.md)
-  (latest Mock test evidence, agent coverage overclaims, serial invocation guidance,
-  SDK selector mistakes, and hidden nested tool errors)
-
 - [`2026-10-25-playground-http-mcp-design.md`](2026-10-25-playground-http-mcp-design.md)
-  (Exterior-hosted HTTP MCP, browser execution ownership, connections independent of React views,
-  the execute tool interface, typed ACP integration, request cancellation, worker ownership, and live remote Relay evidence)
-
-- [`2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md`](2026-10-25-playground-acp-mcp-and-codemode-diagnosis.md)
-  (historical ACP transport, VM marshalling and startup fixes,
-  stress-test diagnosis, and retained complete statement history)
-
-- [`2026-10-25-playground-codemode-session-history.md`](2026-10-25-playground-codemode-session-history.md)
-  (continuous codemode history and desktop frames, source attribution,
-  honest mock keyboard results, and numeric enum help)
-
-- [`2026-10-23-exterior-eap-sdk-migration.md`](2026-10-23-exterior-eap-sdk-migration.md)
-  (EAP v1 SDK, app setup registration, development and release identities,
-  account methods, and live verification limits)
-
-- [`2026-10-20-exterior-adapter-research.md`](2026-10-20-exterior-adapter-research.md)
-  (Exterior package contract, device discovery, OAuth callback, tickets,
-  agent working directories, custom proxy setup, and source evidence)
+  (current `execute` interface, parameter validation, busy rejection, store commit rules,
+  Exterior HTTP MCP, connection and worker ownership, and revision-scoped validation evidence)
 
 - [`2026-10-20-codemode-agent-interface-research.md`](2026-10-20-codemode-agent-interface-research.md)
   (source comparison of Pi, OpenCode V2, and Playground codemode execution,
   SDK discovery, signatures, and results)
-
-- [`2026-10-14-playground-codemode-design.md`](2026-10-14-playground-codemode-design.md)
-  (playground-owned codemode for ACP agents: MCP proxy, isolated execution,
-  explicit output, session state, cancellation, and browser mock evidence)
 
 - [`2026-07-26-tracing-write-pipeline.md`](2026-07-26-tracing-write-pipeline.md)
   (current producer-side `auv-tracing` contract and implementation handoff)

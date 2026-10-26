@@ -25,20 +25,22 @@ describe('isolated codemode', () => {
     expect(JSON.stringify(bindings).length).toBeLessThan(10000)
   })
 
-  it('passes SDK bigint IDs without turning them into JSON strings', async () => {
+  // A supplied host function isolates VM marshalling from SDK request encoding.
+  it('preserves bigint arguments and results across host calls', async () => {
     const calls: unknown[] = []
-    const outcome = await runCodeMode(request('const result = await auv.mouse({ mouse: 9007199254740993n }); text(result); return result;'), {
+    const outcome = await runCodeMode(request('const result = await auv.echo({ id: 9007199254740993n }); text(typeof result.id); text(result); return result;'), {
       ...hooks,
-      auv: { mouse: async (value: unknown) => {
+      auv: { echo: async (value: unknown) => {
         calls.push(value)
         return value
       } },
     }, new AbortController().signal)
     expect(outcome.status).toBe('ok')
-    expect(calls).toEqual([{ mouse: 9007199254740993n }])
+    expect(calls).toEqual([{ id: 9007199254740993n }])
     expect(outcome.codemode?.content).toEqual([
-      { text: '{"mouse":"9007199254740993"}', type: 'text' },
-      { text: '{"mouse":"9007199254740993"}', type: 'text' },
+      { text: 'bigint', type: 'text' },
+      { text: '{"id":"9007199254740993"}', type: 'text' },
+      { text: '{"id":"9007199254740993"}', type: 'text' },
     ])
   })
 
@@ -64,14 +66,14 @@ describe('isolated codemode', () => {
     expect(outcome.codemode?.content).toEqual([{ text: '{"name":"AuvRpcError","rpcCode":5}', type: 'text' }])
   })
 
-  it('composes SDK-shaped calls and returns only explicit output', async () => {
+  it('keeps methods callable on objects returned by host functions', async () => {
     const inputs: unknown[] = []
     const outcome = await runCodeMode(request(`
       const win = await auv.windows.resolve({ appName: 'Counter' });
-      const matches = await win.findText('Increment');
-      await win.click(matches[0]);
-      text({ clicked: matches.length });
-    `), { ...hooks, auv: { windows: { resolve: async () => ({ click: async (target: unknown) => inputs.push(target), findText: async () => [{ x: 10, y: 20 }] }) } } }, new AbortController().signal)
+      const found = await win.findText('Increment');
+      await win.click(found.matches[0]);
+      text({ clicked: found.matches.length });
+    `), { ...hooks, auv: { windows: { resolve: async () => ({ click: async (target: unknown) => inputs.push(target), findText: async () => ({ matches: [{ x: 10, y: 20 }] }) }) } } }, new AbortController().signal)
     expect(outcome).toMatchObject({ status: 'ok' })
     expect(inputs).toEqual([{ x: 10, y: 20 }])
     expect(outcome.codemode?.content).toEqual([{ text: '{"clicked":1}', type: 'text' }])
@@ -84,7 +86,7 @@ describe('isolated codemode', () => {
     expect(second.codemode?.content?.[0]).toEqual({ text: 'undefined', type: 'text' })
   })
 
-  it('commits small JSON state on success and keeps old state on failure', async () => {
+  it('returns candidate JSON state on success and leaves the input state unchanged', async () => {
     const initial = { windowId: 'initial' }
     const first = await runCodeMode(request('store("windowId", "counter"); store("temporary", true); store("temporary", undefined); return load("windowId");', initial), hooks, new AbortController().signal)
     expect(initial).toEqual({ windowId: 'initial' })
@@ -96,24 +98,37 @@ describe('isolated codemode', () => {
     expect(failed.codemode?.content).toEqual([{ text: 'before failure', type: 'text' }])
   })
 
-  it('bounds output before returning a large SDK result to the model', async () => {
+  it('rejects oversized text and preserves earlier output', async () => {
     const outcome = await runCodeMode(request('text("small"); text("x".repeat(16001));'), hooks, new AbortController().signal)
     expect(outcome.status).toBe('error')
     expect(outcome.codemode?.content).toEqual([{ text: 'small', type: 'text' }])
   })
 
   it('interrupts synchronous loops at the deadline', async () => {
-    const outcome = await runCodeMode(request('while (true) {}', {}, 30), hooks, new AbortController().signal)
-    expect(outcome.status).toBe('error')
+    const outcome = await runCodeMode(request('text("loop started"); while (true) {}', {}, 100), hooks, new AbortController().signal)
+    expect(outcome).toMatchObject({
+      codemode: { content: [{ text: 'loop started', type: 'text' }] },
+      message: expect.stringContaining('interrupted'),
+      status: 'error',
+    })
   })
 
   it('cancels a pending asynchronous call', async () => {
     const abort = new AbortController()
-    const pending = runCodeMode(request('await auv.wait();'), { ...hooks, auv: { wait: () => new Promise(() => {}) } }, abort.signal)
-    setTimeout(() => abort.abort(), 20)
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => void (entered = resolve))
+    const pending = runCodeMode(request('text("waiting"); await auv.wait();'), { ...hooks, auv: { wait: () => {
+      entered()
+      return new Promise(() => {})
+    } } }, abort.signal)
+    await waiting
+    abort.abort()
     const outcome = await pending
-    expect(outcome.status).toBe('error')
-    expect(outcome.status === 'error' && outcome.message).toContain('canceled')
+    expect(outcome).toMatchObject({
+      codemode: { content: [{ text: 'waiting', type: 'text' }] },
+      message: expect.stringContaining('canceled'),
+      status: 'error',
+    })
   })
 
   it('explicitly rejects unsupported SDK callback arguments', async () => {
@@ -138,7 +153,7 @@ describe('isolated codemode', () => {
     expect(raw.status === 'error' && raw.message).toContain('window.id or window.window')
   })
 
-  it('emits pixels only through an explicit image request', async () => {
+  it('forwards a capture reference to the host and emits its image response', async () => {
     const images: unknown[] = []
     const outcome = await runCodeMode(request('await image({ captureId: "cap-1" });'), { ...hooks, image: async (capture: unknown) => {
       images.push(capture)
