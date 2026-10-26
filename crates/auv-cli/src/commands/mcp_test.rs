@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use auv_auto_loop::runtime::FakeOperationExecutor;
 use rmcp::{
-  ClientHandler, ServiceExt,
+  ClientHandler, ServerHandler, ServiceExt,
   model::{CallToolRequestParam, ClientInfo, ErrorCode},
 };
 
@@ -13,6 +13,15 @@ use crate::commands::op::ExecutionModeArg;
 #[test]
 fn default_mcp_server_accepts_its_invoke_registry_and_adapter_catalog() {
   McpServer::new(std::path::PathBuf::from(".")).expect("default MCP invoke catalogs should agree");
+}
+
+#[test]
+fn mcp_handshake_names_the_auv_build_rather_than_the_transport_crate() {
+  let server = McpServer::new(std::path::PathBuf::from(".")).unwrap();
+  let info = server.get_info();
+
+  assert_eq!(info.server_info.name, "auv");
+  assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
@@ -206,6 +215,175 @@ fn mcp_support_metadata_comes_from_the_executable_definition() {
 
   let press_keys = super::invoke_command_metadata(registry.resolve("input.pressKeys").unwrap());
   assert_eq!(press_keys["role"], serde_json::json!({ "kind": "alias", "canonical": "input.keys" }));
+}
+
+#[test]
+fn mcp_runner_support_metadata_states_the_route_and_cells() {
+  let registry = auv_cli_invoke::default_registry();
+  for command in registry.all() {
+    let metadata = super::invoke_command_metadata(command);
+    let expected_route = match command.runner {
+      auv_cli_invoke::RunnerSupport::NoRoute => "no_route",
+      auv_cli_invoke::RunnerSupport::Direct => "direct",
+      auv_cli_invoke::RunnerSupport::Cells(_) => "cells",
+    };
+    assert_eq!(metadata["runner_support"]["route"], serde_json::json!(expected_route), "runner route of {}", command.id);
+    match command.runner_cells() {
+      None => assert!(
+        metadata["runner_support"].get("cells").is_none(),
+        "{} has no Runner route, so it must not carry runner cells",
+        command.id
+      ),
+      Some(cells) => assert_eq!(metadata["runner_support"]["cells"], serde_json::to_value(cells).unwrap(), "runner cells of {}", command.id),
+    }
+  }
+
+  // Pins from the 2026-10-25 source audit: the cells where the Runner route
+  // differs from the direct path must stay stated as different cells.
+  let click_text = super::invoke_command_metadata(registry.resolve("screen.clickText").unwrap());
+  assert_eq!(click_text["support"]["linux"], serde_json::json!({ "state": "unsupported" }));
+  assert_eq!(click_text["runner_support"]["cells"]["linux"], serde_json::json!({ "state": "supported" }));
+
+  let window_click_text = super::invoke_command_metadata(registry.resolve("window.clickText").unwrap());
+  assert_eq!(
+    window_click_text["runner_support"]["cells"]["linux"],
+    serde_json::json!({ "state": "partial", "note": "foreground portal delivery only; background_only input policy is rejected" })
+  );
+
+  let drag = super::invoke_command_metadata(registry.resolve("input.drag").unwrap());
+  assert_eq!(
+    drag["runner_support"]["cells"]["macos"],
+    serde_json::json!({ "state": "partial", "note": "foreground-preferred input policy is refused; DragMouse carries no window policy" })
+  );
+
+  // The direct macOS refusal hints a selected Runner may expose it remotely; the
+  // Runner-side ScrollPoint handler refuses it for the same driver fact, so the
+  // audited cells stay equal and the declaration is the direct shorthand.
+  let scroll_point = super::invoke_command_metadata(registry.resolve("input.scrollPoint").unwrap());
+  assert_eq!(scroll_point["runner_support"]["route"], serde_json::json!("direct"));
+  assert_eq!(
+    scroll_point["runner_support"]["cells"]["macos"],
+    serde_json::json!({ "state": "unsupported", "note": "the driver exposes only window-owned scrolling" })
+  );
+
+  let type_text = super::invoke_command_metadata(registry.resolve("input.typeText").unwrap());
+  assert_eq!(type_text["runner_support"]["route"], serde_json::json!("direct"));
+  assert_eq!(type_text["runner_support"]["cells"], type_text["support"]);
+
+  // Fixtures state no route at all, not "unsupported platforms": dispatch
+  // refuses them before any platform judgment.
+  let frame = super::invoke_command_metadata(registry.resolve("scan.frame").unwrap());
+  assert_eq!(frame["runner_support"], serde_json::json!({ "route": "no_route" }));
+}
+
+// ROOT CAUSE:
+//
+// If the CLI help and the MCP `x-auv-commands` metadata rendered support from
+// different sources, one surface could claim a path the other denies; the
+// screen.clickText Linux gap (direct path refuses, Runner route works) is
+// exactly a cell the two surfaces must state identically.
+//
+// The fix renders both surfaces from one registry declaration. This test
+// proves the words a user reads in CLI help equal the JSON a model reads.
+#[test]
+fn cli_help_and_mcp_metadata_render_runner_support_from_the_same_registry_cells() {
+  let registry = auv_cli_invoke::default_registry();
+  for command in registry.all() {
+    let metadata = super::invoke_command_metadata(command);
+    let help = auv_cli_invoke::render_command_help(command);
+
+    let direct = help_block_cells(&help, "Platform support:").expect("direct cells are listed");
+    assert_eq!(
+      direct,
+      metadata_cells(&metadata["support"]),
+      "direct cells of {} must agree between CLI help and MCP metadata",
+      command.id
+    );
+
+    match metadata["runner_support"]["route"].as_str().unwrap() {
+      "no_route" => {
+        assert!(help.contains("no Runner route; run it without a selected Run or Device"), "fixture note of {}:\n{help}", command.id);
+        assert!(metadata["runner_support"].get("cells").is_none(), "{} must not carry runner cells", command.id);
+      }
+      route => {
+        let cells = metadata["runner_support"]["cells"].clone();
+        if route == "direct" {
+          assert!(help.contains("same as the direct local path above"), "direct-route note of {}:\n{help}", command.id);
+          assert_eq!(cells, metadata["support"], "{}: a direct route repeats the direct cells", command.id);
+        } else {
+          let runner = help_block_cells(&help, "Selected Runner support:").expect("runner cells are listed");
+          assert_eq!(runner, metadata_cells(&cells), "runner cells of {} must agree between CLI help and MCP metadata", command.id);
+        }
+      }
+    }
+  }
+}
+
+#[test]
+fn invoke_description_states_runner_support_where_it_differs_from_direct() {
+  let registry = auv_cli_invoke::default_registry();
+  let description = super::invoke_tool_description(&registry);
+
+  let click_text = description_command_block(&description, "screen.clickText");
+  assert!(
+    click_text.contains("\n  runner support: macOS supported; Linux supported; Windows partial"),
+    "screen.clickText block:\n{click_text}"
+  );
+
+  let type_text = description_command_block(&description, "input.typeText");
+  assert!(!type_text.contains("runner support:"), "equal cells stay covered by the support line:\n{type_text}");
+
+  let frame = description_command_block(&description, "scan.frame");
+  assert!(frame.contains("no Runner route"), "fixture block:\n{frame}");
+}
+
+/// The per-platform cells one help block lists, as MCP `(state, note)` pairs.
+/// Help renders each cell as `<label> <word>` plus `: <note>` when the cell
+/// has one, so the note is everything after the word's separating space.
+fn help_block_cells<'a>(help: &'a str, header: &'a str) -> Option<Vec<(String, Option<&'a str>)>> {
+  let mut lines = help.lines().skip_while(|line| *line != header);
+  lines.next()?;
+  let labels = ["macOS", "Linux", "Windows"];
+  let mut cells = Vec::new();
+  for line in lines {
+    let mut tokens = line.trim_start().splitn(2, char::is_whitespace);
+    let Some(label) = tokens.next() else { break };
+    if !labels.contains(&label) {
+      break;
+    }
+    let rest = tokens.next().unwrap_or_default().trim_start();
+    let mut rest_tokens = rest.splitn(2, char::is_whitespace);
+    let word = rest_tokens.next().unwrap_or_else(|| panic!("support word missing in {line:?}"));
+    let state = match word.trim_end_matches(':') {
+      "yes" => "supported",
+      "partial" => "partial",
+      "no" => "unsupported",
+      "?" => "not_evidenced",
+      other => panic!("unknown support word {other:?} in {line:?}"),
+    };
+    cells.push((state.to_string(), rest_tokens.next()));
+  }
+  (cells.len() == labels.len()).then_some(cells)
+}
+
+fn metadata_cells(cells: &serde_json::Value) -> Vec<(String, Option<&str>)> {
+  ["macos", "linux", "windows"]
+    .iter()
+    .map(|key| {
+      let cell = &cells[key];
+      let state = cell["state"].as_str().unwrap_or_else(|| panic!("missing {key} cell")).to_string();
+      let note = cell.get("note").and_then(|note| note.as_str());
+      (state, note)
+    })
+    .collect()
+}
+
+fn description_command_block(description: &str, id: &str) -> String {
+  description
+    .split("\n\n")
+    .find(|block| block.starts_with(&format!("{id}: ")))
+    .unwrap_or_else(|| panic!("{id} block missing from invoke description"))
+    .to_string()
 }
 
 #[test]
@@ -509,4 +687,134 @@ async fn invoke_description_lists_inputs_and_example_calls() {
   let schema = serde_json::to_value(&invoke.input_schema).unwrap();
   let wait = schema["x-auv-commands"].as_array().unwrap().iter().find(|command| command["id"] == "screen.waitForText").unwrap();
   assert_eq!(wait["examples"][0]["call"], serde_json::json!({ "command_id": "screen.waitForText", "inputs": { "query": "Ready" } }));
+}
+
+#[test]
+fn invoke_tool_request_deserialization_handles_dry_run_and_rejects_unknown_fields() {
+  use super::InvokeToolRequest;
+
+  // 1. dry_run: true correctly decodes
+  let req: InvokeToolRequest = serde_json::from_value(serde_json::json!({
+    "command_id": "test.cmd",
+    "dry_run": true,
+  })).expect("dry_run: true should decode");
+  assert_eq!(req.command_id, "test.cmd");
+  assert!(req.dry_run);
+
+  // 2. dry_run: false correctly decodes
+  let req: InvokeToolRequest = serde_json::from_value(serde_json::json!({
+    "command_id": "test.cmd",
+    "dry_run": false,
+  })).expect("dry_run: false should decode");
+  assert!(!req.dry_run);
+
+  // 3. Omitting dry_run preserves existing default semantics (false)
+  let req: InvokeToolRequest = serde_json::from_value(serde_json::json!({
+    "command_id": "test.cmd",
+  })).expect("omitting dry_run should decode");
+  assert!(!req.dry_run);
+
+  // 4. inputs with arbitrary command-level keys is accepted
+  let req: InvokeToolRequest = serde_json::from_value(serde_json::json!({
+    "command_id": "input.typeText",
+    "inputs": { "text": "hello", "custom_key": "custom_val" },
+    "dry_run": true,
+  })).expect("inputs map should allow arbitrary command keys");
+  assert_eq!(req.inputs.get("text").map(String::as_str), Some("hello"));
+  assert_eq!(req.inputs.get("custom_key").map(String::as_str), Some("custom_val"));
+
+  // 5. camelCase dryRun is rejected as an unknown field
+  let err = serde_json::from_value::<InvokeToolRequest>(serde_json::json!({
+    "command_id": "test.cmd",
+    "dryRun": true,
+  })).expect_err("dryRun should be rejected");
+  assert!(err.to_string().contains("unknown field `dryRun`"), "error was: {err}");
+
+  // 6. camelCase storeRoot is rejected
+  let err = serde_json::from_value::<InvokeToolRequest>(serde_json::json!({
+    "command_id": "test.cmd",
+    "storeRoot": "/tmp",
+  })).expect_err("storeRoot should be rejected");
+  assert!(err.to_string().contains("unknown field `storeRoot`"), "error was: {err}");
+
+  // 7. Other unknown top-level fields are rejected
+  let err = serde_json::from_value::<InvokeToolRequest>(serde_json::json!({
+    "command_id": "test.cmd",
+    "unexpected_field": true,
+  })).expect_err("unexpected_field should be rejected");
+  assert!(err.to_string().contains("unknown field `unexpected_field`"), "error was: {err}");
+}
+
+#[test]
+fn invoke_tool_schema_rejects_additional_properties_matching_serde_contract() {
+  let server = McpServer::new(std::path::PathBuf::from(".")).unwrap();
+  let tools = server.tool_router.list_all();
+  let invoke = tools.iter().find(|tool| tool.name == "invoke").expect("invoke tool must be registered");
+  let schema = serde_json::to_value(&invoke.input_schema).unwrap();
+
+  assert_eq!(schema["additionalProperties"], false, "invoke input schema must deny additionalProperties to match Serde contract: {schema}");
+}
+
+#[tokio::test]
+async fn invoke_over_mcp_rejects_unknown_top_level_arguments_before_dispatch() {
+  let (server, local_calls) = counting_display_list_server(auv::selection::RootSelection::default());
+  let (server_transport, client_transport) = tokio::io::duplex(65_536);
+  let server_handle = tokio::spawn(async move {
+    let service = server.serve(server_transport).await?;
+    service.waiting().await?;
+    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+  });
+  let client = TestClient.serve(client_transport).await.unwrap();
+
+  let bad_arguments = [
+    serde_json::json!({ "command_id": "display.list", "dryRun": true }),
+    serde_json::json!({ "command_id": "display.list", "storeRoot": "/custom/path" }),
+    serde_json::json!({ "command_id": "display.list", "unexpected": true }),
+    serde_json::json!({ "command_id": "display.list", "dry_run": true, "extra": "forbidden" }),
+  ];
+
+  for arguments in bad_arguments {
+    let outcome = client
+      .call_tool(CallToolRequestParam {
+        name: "invoke".into(),
+        arguments: arguments.as_object().cloned(),
+      })
+      .await;
+
+    match outcome {
+      Err(rmcp::service::ServiceError::McpError(error)) => {
+        assert_eq!(
+          error.code,
+          ErrorCode::INVALID_PARAMS,
+          "{arguments} must fail closed with INVALID_PARAMS, got: {error:?}"
+        );
+      }
+      other => panic!("{arguments} must fail closed with McpError(INVALID_PARAMS), got: {other:?}"),
+    }
+  }
+
+  assert_eq!(
+    local_calls.load(std::sync::atomic::Ordering::SeqCst),
+    0,
+    "rejected invoke requests with unknown fields must never reach the executor/adapter"
+  );
+
+  // Legitimate invoke with dry_run: true must succeed and dispatch
+  let accepted = client
+    .call_tool(CallToolRequestParam {
+      name: "invoke".into(),
+      arguments: serde_json::json!({ "command_id": "display.list", "dry_run": true }).as_object().cloned(),
+    })
+    .await
+    .expect("valid invoke with dry_run: true should be accepted");
+
+  assert_ne!(accepted.is_error, Some(true), "valid invoke must not report an error: {accepted:?}");
+  assert_eq!(
+    local_calls.load(std::sync::atomic::Ordering::SeqCst),
+    1,
+    "valid invoke must dispatch to the adapter exactly once"
+  );
+
+  client.cancel().await.unwrap();
+  server_handle.await.unwrap().unwrap();
 }
