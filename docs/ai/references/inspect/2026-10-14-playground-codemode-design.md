@@ -1,5 +1,9 @@
 # Playground codemode
 
+NOTICE: The current tool is `execute`; its description replaces the session briefing.
+The [HTTP MCP contract](2026-10-25-playground-http-mcp-design.md) records this interface change and its validation.
+Earlier tool names and briefing evidence below describe the previous interface.
+
 ## Execution contract
 
 The Playground supplies one `codemode({ code, timeoutMs })` MCP tool to an ACP agent.

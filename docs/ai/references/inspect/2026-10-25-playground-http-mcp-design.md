@@ -13,6 +13,17 @@ Exterior returns an agent-reachable HTTP MCP URL and its authorization headers.
 The page connects a fresh MCP SDK `Server` for each MCP session.
 `CodeModeHost` owns the tool definition, execution, cancellation, and session store.
 
+The page exposes one MCP tool, `execute({ code, timeoutMs? })`.
+Its description supplies execution rules and SDK discovery instructions.
+Scripts use `api.help()`, `api.search()`, and `api.describe()` for detailed SDK help.
+The earlier `codemode` tool name is replaced without an alias.
+ACP user prompts pass through unchanged. No first-prompt briefing or per-session briefing state remains.
+
+This follows OpenCode's separation of the `execute` interface from its internal Code Mode implementation.
+See [OpenCode's tool documentation](https://opencode.ai/v2/docs/tools#execute).
+OpenCode can still wrap this MCP tool in its own `execute` call.
+Its tool orchestration and the page's device execution have separate ownership.
+
 The ACP `session/new` request receives:
 
 ```ts
@@ -34,7 +45,7 @@ The browser no longer handles experimental `mcp/message` requests.
 The agent device runs its ordinary ACP agent, without a Playground startup wrapper.
 
 `codeModeConnection` adapts the typed `AcpClientConnection` interface.
-It supplies the MCP endpoint through `newSession`, adds the first-prompt briefing, and forwards cancellation.
+It supplies the MCP endpoint through `newSession` and forwards cancellation.
 The ACP SDK owns message parsing and request matching.
 The controller owns negotiated capabilities, connection errors, and active-session selection.
 Session creation updates controller state directly; the Playground does not refresh an unused session list.
@@ -108,12 +119,16 @@ Only the replacement opens an ACP socket, and the canceled request cannot replac
 Unit tests also exercise the MCP host with the MCP SDK's real client and linked transports.
 
 The 2026-10-26 simplification passed all 101 unit tests, TypeScript checking, the production build, changed-file ESLint, and the browser harness.
-The unit tests use the real ACP adapter and controller for session setup, briefing, cancellation, and connection cleanup.
+The unit tests use the real ACP adapter and controller for session setup, user prompts, cancellation, and connection cleanup.
 The browser harness also rejects session-list requests when the agent does not advertise that capability.
 
 The interface and worker ownership refactor also passes these checks.
 The browser harness cancels codemode through Reset and resumes an editor step afterward.
 The editor variable survives failures, cancellation, Reset during codemode, and timeout.
+
+The `execute` interface simplification passes the same 101 tests, typecheck, build, changed-file ESLint, and browser harness.
+Tool discovery supplies instructions before session creation. First and later sessions send user prompts unchanged.
+This check uses the synthetic ACP peer and Mock Runner; the renamed interface has no new live model evidence.
 
 Evidence level: live remote Relay and ordinary local OpenCode 2.0.26, with model inference.
 The actual Playground page connected to `https://relay.apps.superpowerlulu.win`.

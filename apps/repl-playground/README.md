@@ -45,7 +45,7 @@ controlled desktop.
   as a device, so scripts, the timeline and replay behave the same on it.
 - **Agent / Script tabs**: share the center panel. Sign in with Exterior and
   connect a codemode agent. Tab switches retain the connection and editor.
-  Through Exterior's HTTP MCP endpoint, the agent calls `codemode` to execute code
+  Through Exterior's HTTP MCP endpoint, the agent calls `execute` to execute code
   against the selected Device or mock desktop. Explicit output returns to the
   agent; SDK calls appear in the timeline. Connections require codemode.
   A new connection starts a fresh agent process; disconnect ends it.
@@ -253,6 +253,11 @@ The agent receives its URL and authorization header in `session/new.mcpServers`.
 Exterior forwards MCP messages to the page, where the code runs.
 The agent must advertise `agentCapabilities.mcpCapabilities.http`.
 The Playground remains a static site.
+
+The MCP interface exposes one tool: `execute({ code, timeoutMs? })`.
+Its description supplies execution rules and SDK discovery instructions.
+Scripts use `api.help()`, `api.search()`, and `api.describe()` for detailed SDK help.
+The page sends user messages unchanged, with no extra briefing message.
 
 The agent device needs an Exterior client and an installed ACP agent.
 Use the [desktop app or CLI daemon](https://github.com/lulu0119/exterior/blob/aec6c44ae53b0a896f7b206a0e3b4a56a73fbc7e/docs/manual.md).

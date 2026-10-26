@@ -11,7 +11,15 @@ import { session } from '../../runtime/session'
 import { applyScriptToEditor } from './editor-bridge'
 
 const tool = {
-  description: 'Execute TypeScript in the connected AUV Playground. Call codemode sequentially, including help queries. Wait for each tool result before starting the next call. Start with text(api.help()). Find SDK methods with text(api.search({query:"window text"})); read signatures, types and examples with text(api.describe({path:"WindowClient.findText"})). Use auv for the selected device, sdk for constants and geometry, text(value) or return for output, await image(capture) for bounded screenshots, and store/load for small JSON state. Each call has fresh variables. Delivered inputs are not rolled back on failure. SDK callbacks and async iterators are not supported yet.',
+  description: [
+    'Execute TypeScript in AUV Playground against its selected Device or mock desktop. The agent\'s local files and shell cannot reach this environment.',
+    'Start with text(api.help()). Find exact SDK methods with api.search({query:"window text"}) and api.describe({path:"WindowClient.findText"}). Output their results with text().',
+    'Use auv for SDK calls, sdk for constants and geometry, text(value) or return for output, and await image(capture) for bounded screenshots.',
+    'Calls share one mutable desktop. Call sequentially, including help queries, and await every device call.',
+    'Each call has fresh variables. Use store(key, value) and load(key) for small JSON values committed only after success. Save IDs, not SDK handles or pixels.',
+    'SDK arguments must be data. Callbacks, async iterators, and editor-only helpers are unavailable. Read help for exact types and examples.',
+    'Failed or canceled scripts do not undo delivered input. Verify the requested application state after execution.',
+  ].join('\n'),
   inputSchema: {
     additionalProperties: false,
     properties: {
@@ -21,7 +29,7 @@ const tool = {
     required: ['code'],
     type: 'object',
   },
-  name: 'codemode',
+  name: 'execute',
 }
 
 /** Owns one ACP session's JSON state and the currently executing tool call. */
@@ -68,7 +76,7 @@ export class CodeModeHost {
     const timeoutMs = params?.timeoutMs ?? 30000
     if (typeof code !== 'string' || !code.trim() || code.length > 100000
       || typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) {
-      return error('Codemode requires code and a timeoutMs from 1 to 120000.')
+      return error('execute requires code and a timeoutMs from 1 to 120000.')
     }
     const active = new AbortController()
     this.#active = active
@@ -111,11 +119,10 @@ export class CodeModeHost {
 }
 
 /**
- * Adds codemode to the typed ACP connection. The SDK owns protocol messages.
- * This adapter owns session setup, briefing, and tool endpoint cleanup.
+ * Adds the Playground MCP endpoint to the typed ACP connection.
+ * This adapter owns session setup and endpoint cleanup; the SDK owns messages.
  */
-export function codeModeConnection(connection: AcpClientConnection, host: CodeModeHost, tools: ServedMcp, briefing: () => string): AcpClientConnection {
-  let briefedSessionId: string | undefined
+export function codeModeConnection(connection: AcpClientConnection, host: CodeModeHost, tools: ServedMcp): AcpClientConnection {
   const close = () => {
     host.cancel()
     tools.close()
@@ -132,13 +139,6 @@ export function codeModeConnection(connection: AcpClientConnection, host: CodeMo
     newSession(request) {
       host.setSession(undefined)
       return connection.newSession({ ...request, mcpServers: [...request.mcpServers, { headers: tools.headers, name: 'auv-playground', type: 'http', url: tools.url }] })
-    },
-    prompt(request) {
-      // New sessions reuse the connection, so each receives its own briefing.
-      if (briefedSessionId === request.sessionId)
-        return connection.prompt(request)
-      briefedSessionId = request.sessionId
-      return connection.prompt({ ...request, prompt: [{ text: briefing(), type: 'text' }, ...request.prompt] })
     },
   }
 }

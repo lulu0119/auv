@@ -51,7 +51,9 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
         assert.ok(declaration, 'An ordinary agent must receive the HTTP MCP declaration')
         const client = new Client({ name: 'agent', version: '1' })
         await client.connect(new StreamableHTTPClientTransport(new URL(declaration.url), { requestInit: { headers: Object.fromEntries(declaration.headers.map(header => [header.name, header.value])) } }))
-        assert.equal((await client.listTools()).tools[0].name, 'codemode', 'Tool discovery must work before ACP session creation finishes')
+        const { tools } = await client.listTools()
+        assert.deepEqual(tools.map(tool => tool.name), ['execute'], 'Tool discovery must work before ACP session creation finishes')
+        assert.ok(tools[0].description.includes('text(api.help())'), 'Tool discovery must include execution and SDK discovery instructions')
         clients.push(client)
         result = { sessionId: `ui-${message.id}` }
       }
@@ -62,8 +64,8 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
         // OpenCode 2.0.26 sends nested statuses in rawOutput.metadata.toolCalls.
         notify({ content: { text: 'I will inspect the desktop and check the result.', type: 'text' }, sessionUpdate: 'agent_message_chunk' })
         notify({ content: [{ content: { text: 'ReferenceError: Unknown identifier \'text\'.', type: 'text' }, type: 'content' }], kind: 'other', rawInput: { code: 'text(api.help());' }, rawOutput: { metadata: { error: true } }, sessionUpdate: 'tool_call', status: 'completed', title: 'execute', toolCallId: 'code-failure' })
-        notify({ kind: 'other', rawInput: { code: 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });' }, sessionUpdate: 'tool_call', status: 'in_progress', title: 'execute', toolCallId: 'nested-failure' })
-        notify({ content: [{ content: { text: 'Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', type: 'text' }, type: 'content' }], rawOutput: { metadata: { toolCalls: [{ status: 'error', tool: 'auv-playground.codemode' }] } }, sessionUpdate: 'tool_call_update', status: 'completed', toolCallId: 'nested-failure' })
+        notify({ kind: 'other', rawInput: { code: 'return await tools["auv-playground"].execute({ code: "await auv.overlay.show({});" });' }, sessionUpdate: 'tool_call', status: 'in_progress', title: 'execute', toolCallId: 'nested-failure' })
+        notify({ content: [{ content: { text: 'Script failed: OverlayService/ShowOverlay is UNIMPLEMENTED', type: 'text' }, type: 'content' }], rawOutput: { metadata: { toolCalls: [{ status: 'error', tool: 'auv-playground.execute' }] } }, sessionUpdate: 'tool_call_update', status: 'completed', toolCallId: 'nested-failure' })
         notify({ content: [{ content: imageResult, type: 'content' }], kind: 'read', rawInput: { code: 'await image(capture);' }, sessionUpdate: 'tool_call', status: 'completed', title: 'Capture result', toolCallId: 'image-result' })
         notify({ content: [{ content: { text: '0 errors found.', type: 'text' }, type: 'content' }], kind: 'read', rawInput: { path: 'notes.md' }, sessionUpdate: 'tool_call', status: 'completed', title: 'Read notes', toolCallId: 'neutral-result' })
         socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {
@@ -121,7 +123,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     assert.equal(ticketRequests, 1, 'Remounting the view must retain the connection without requesting a replacement ticket')
     assert.equal(connections, 1, 'Remounting the view must retain the ACP socket')
     assert.equal(relay.registrations.length, initialEndpoints + 1, 'Remounting the view must retain the MCP endpoint')
-    assert.equal((await clients[0].listTools()).tools[0].name, 'codemode', 'The original MCP endpoint must still serve tools after remount')
+    assert.equal((await clients[0].listTools()).tools[0].name, 'execute', 'The original MCP endpoint must still serve tools after remount')
     assert.ok(messages.some(message => message.method === 'session/new' && message.params.cwd === cwd), 'ACP must use the selected device directory')
     const opened = connections
     const sessions = messages.filter(message => message.method === 'session/new').length
@@ -163,7 +165,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     assert.equal(await activity.locator('[data-tool-id="neutral-result"]').getAttribute('data-tool-status'), 'finished', 'Result text must not be parsed to infer an error')
     await tool.locator('summary').first().click()
     await tool.locator('summary').filter({ hasText: 'Script' }).click()
-    assert.equal(await tool.locator('[data-tool-script]').textContent(), 'return await tools["auv-playground"].codemode({ code: "await auv.overlay.show({});" });', 'Scripts must remain inspectable without JSON string escaping')
+    assert.equal(await tool.locator('[data-tool-script]').textContent(), 'return await tools["auv-playground"].execute({ code: "await auv.overlay.show({});" });', 'Scripts must remain inspectable without JSON string escaping')
     await tool.locator('summary').filter({ hasText: 'Protocol details' }).click()
     await tool.getByText('ACP status: completed', { exact: true }).waitFor()
     assert.match(await tool.textContent(), /"status": "error"/, 'The original nested error metadata must remain inspectable')
@@ -171,7 +173,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     assert.ok(relay.registrations.includes('Bearer connection-token'), 'The MCP endpoint must use a live account token')
     assert.equal(connections, opened, 'Tab switches must retain the ACP socket')
     assert.equal(messages.filter(message => message.method === 'session/new').length, sessions, 'Tab switches must retain the ACP session')
-    assert.ok(messages.find(message => message.method === 'session/prompt').params.prompt.some(part => part.text?.includes('api.help()')))
+    assert.deepEqual(messages.find(message => message.method === 'session/prompt').params.prompt, [{ text: 'Check the connection', type: 'text' }], 'Execution instructions must not be injected into user messages')
     if (process.env.AUV_AGENT_CONNECTED_SCREENSHOT) {
       await activity.locator('summary').first().click()
       await activity.locator('summary').first().scrollIntoViewIfNeeded()
@@ -187,7 +189,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     const prompts = messages.filter(message => message.method === 'session/prompt')
     assert.equal(prompts.length, 2)
     assert.notEqual(prompts[0].params.sessionId, prompts[1].params.sessionId)
-    assert.ok(prompts[1].params.prompt.some(part => part.text?.includes('api.help()')), 'New sessions must receive the briefing again')
+    assert.deepEqual(prompts[1].params.prompt, [{ text: 'Check the new session', type: 'text' }], 'New sessions must also send only the user message')
     assert.equal(messages.some(message => message.method === 'session/list'), false, 'Creating sessions must not request a session list when the agent does not advertise one')
     await page.getByRole('button', { exact: true, name: 'Disconnect' }).click()
     supported = false
@@ -224,7 +226,7 @@ async function verifyAgentConnection(browser, url, relay, imageResult) {
     await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
     assert.equal(connections, beforeCancel + 1, 'Canceled startup must not open a socket or replace the next connection')
     assert.deepEqual(errors, [])
-    return { canceledStartup: true, connectionPreserved: true, deviceDirectory: true, inspectableToolResults: true, liveAccessToken: true, newSessionBriefing: true, singleUseTicket: true, startupFailureAndReconnect: true, strictModeViewRemount: true, unsupportedAgentBlocked: true }
+    return { canceledStartup: true, connectionPreserved: true, deviceDirectory: true, inspectableToolResults: true, liveAccessToken: true, singleUseTicket: true, startupFailureAndReconnect: true, strictModeViewRemount: true, unsupportedAgentBlocked: true, userPromptsUnchanged: true }
   }
   catch (error) {
     // eslint-disable-next-line unicorn/prefer-dom-node-text-content -- Only rendered text belongs in failure logs; closed protocol details can contain image data.
@@ -300,9 +302,9 @@ async function verifyBrowser() {
       return import('/playground/src/store.ts').then(({ usePlayground }) => usePlayground.setState({ backend: null }))
     })
     try {
-      const pure = await client.callTool({ arguments: { code: 'text(api.help().limits.memoryMiB); return 2;' }, name: 'codemode' })
+      const pure = await client.callTool({ arguments: { code: 'text(api.help().limits.memoryMiB); return 2;' }, name: 'execute' })
       assert.equal(pure.isError, false, `Pure code and API help must work before a device is ready: ${JSON.stringify(pure)}`)
-      const missing = await client.callTool({ arguments: { code: 'await auv.windows.list();' }, name: 'codemode' })
+      const missing = await client.callTool({ arguments: { code: 'await auv.windows.list();' }, name: 'execute' })
       assert.equal(missing.isError, true)
       assert.match(missing.content.at(-1).text, /needs a device/)
     }
@@ -310,17 +312,17 @@ async function verifyBrowser() {
       await page.evaluate(async () => (await import('/playground/src/store.ts')).usePlayground.setState({ backend: window.savedBackend }))
     }
     assert.match((await client.listTools()).tools[0].description, /api\.help/)
-    const discovery = await client.callTool({ arguments: { code: 'text(api.help()); text(api.describe({ path: api.search({ query: "WindowClient.findText" }).items[0].path }));' }, name: 'codemode' })
+    const discovery = await client.callTool({ arguments: { code: 'text(api.help()); text(api.describe({ path: api.search({ query: "WindowClient.findText" }).items[0].path }));' }, name: 'execute' })
     assert.equal(discovery.isError, false, JSON.stringify(discovery))
     const help = JSON.parse(discovery.content[1].text)
     assert.match(help.signature, /query: string/)
     assert.match(help.types.FindWindowTextResponse.definition, /matches/)
     assert.equal((await page.evaluate(() => window.playgroundState().calls)).length, 0, 'Metadata help must not call the device')
-    const selectedDisplay = await client.callTool({ arguments: { code: 'const selector = { selector: { case: "display", value: { displayId: "2" } } }; text((await auv.displays.capture(selector)).display.displayId); text((await auv.displays.findText(selector, "Counter")).matches.length);' }, name: 'codemode' })
+    const selectedDisplay = await client.callTool({ arguments: { code: 'const selector = { selector: { case: "display", value: { displayId: "2" } } }; text((await auv.displays.capture(selector)).display.displayId); text((await auv.displays.findText(selector, "Counter")).matches.length);' }, name: 'execute' })
     assert.equal(selectedDisplay.isError, false, JSON.stringify(selectedDisplay))
     assert.ok(selectedDisplay.content.some(item => item.text === '2'), 'The SDK selector must reach display 2')
     assert.ok(selectedDisplay.content.some(item => item.text === '1'), 'Counter must be found on display 2')
-    const example = await client.callTool({ arguments: { code: help.examples[0] }, name: 'codemode' })
+    const example = await client.callTool({ arguments: { code: help.examples[0] }, name: 'execute' })
     assert.equal(example.isError, false, JSON.stringify(example))
     assert.ok(example.content.some(item => item.type === 'text' && item.text.includes('Increment')))
     const result = await client.callTool({ arguments: { code: `
@@ -333,7 +335,7 @@ async function verifyBrowser() {
       store('counterId', counter.id);
       const shot = await counter.capture();
       await image(shot.capture);
-    ` }, name: 'codemode' })
+    ` }, name: 'execute' })
     assert.equal(result.isError, false, JSON.stringify(result))
     assert.ok(result.content.some(item => item.type === 'image'))
     assert.ok(result.content.some(item => item.type === 'text' && item.text === '["Count: 3"]'))
@@ -358,7 +360,7 @@ async function verifyBrowser() {
       const { cursorSeq, latestFramesAt } = await import('/playground/src/timeline.ts')
       return { calls: state.calls.map(call => call.id), frames: latestFramesAt(state, cursorSeq(state)).map(frame => frame.handle.$ref), seq: cursorSeq(state) }
     })
-    const saved = await client.callTool({ arguments: { code: 'text(load("counterId")); text(typeof counter); text(typeof editorValue);' }, name: 'codemode' })
+    const saved = await client.callTool({ arguments: { code: 'text(load("counterId")); text(typeof counter); text(typeof editorValue);' }, name: 'execute' })
     assert.equal(saved.isError, false)
     assert.equal(saved.content.filter(item => item.type === 'text' && item.text === 'undefined').length, 2)
     const continued = await page.evaluate(async () => {
@@ -372,15 +374,15 @@ async function verifyBrowser() {
     await page.getByRole('tab', { exact: true, name: 'Variables' }).click()
     assert.match(await page.getByRole('tabpanel', { exact: true, name: 'Variables' }).textContent(), /Declared names show up here/, 'A fresh VM must not display variables from earlier scripts or the editor')
     await page.getByRole('tab', { name: /^Calls / }).click()
-    const failed = await client.callTool({ arguments: { code: 'store("counterId", "bad"); text("before"); throw new Error("intentional");' }, name: 'codemode' })
+    const failed = await client.callTool({ arguments: { code: 'store("counterId", "bad"); text("before"); throw new Error("intentional");' }, name: 'execute' })
     assert.equal(failed.isError, true)
     assert.ok(failed.content.some(item => item.type === 'text' && item.text === 'before'))
-    const restored = await client.callTool({ arguments: { code: 'return load("counterId");' }, name: 'codemode' })
+    const restored = await client.callTool({ arguments: { code: 'return load("counterId");' }, name: 'execute' })
     assert.ok(restored.content.some(item => item.type === 'text' && item.text === 'w-counter'))
     const jpeg = await client.callTool({ arguments: { code: `
       const counter = await auv.windows.get(load('counterId'));
       await image((await counter.capture()).capture, { encoding: sdk.ImageEncoding.JPEG, maxSize: { height: 256, width: 256 } });
-    ` }, name: 'codemode' })
+    ` }, name: 'execute' })
     assert.equal(jpeg.isError, false, JSON.stringify(jpeg))
     assert.ok(jpeg.content.some(item => item.type === 'image' && item.mimeType === 'image/jpeg'))
     const appended = await page.evaluate(() => window.playgroundState().calls.map(call => ({ id: call.id, script: call.script, seq: call.seq })))
@@ -391,28 +393,28 @@ async function verifyBrowser() {
     await page.locator(`[data-call-id="${history.calls.at(-1)}"] td`).first().click()
     await page.locator('summary').filter({ hasText: 'source' }).click()
     assert.match(await page.locator('details pre').textContent(), /for \(let i = 0; i < 3;/, 'The inspector must show the selected call source')
-    const canceled = client.callTool({ arguments: { code: 'text("waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' })
+    const canceled = client.callTool({ arguments: { code: 'text("waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'execute' })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('waiting')))
     await page.evaluate(() => window.codemodeHost.cancel())
     const canceledResult = await canceled
     assert.equal(canceledResult.isError, true)
     assert.ok(canceledResult.content.some(item => item.type === 'text' && item.text === 'waiting'), JSON.stringify(canceledResult))
-    const reset = client.callTool({ arguments: { code: 'text("reset waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' })
+    const reset = client.callTool({ arguments: { code: 'text("reset waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'execute' })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('reset waiting')))
     await page.evaluate(async () => (await import('/playground/src/runtime/session.ts')).session.reset())
     assert.equal((await reset).isError, true, 'Reset during codemode must cancel that execution and preserve the editor REPL')
     const transportAbort = new AbortController()
-    const transportCanceled = client.callTool({ arguments: { code: 'text("transport waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' }, undefined, { signal: transportAbort.signal })
+    const transportCanceled = client.callTool({ arguments: { code: 'text("transport waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'execute' }, undefined, { signal: transportAbort.signal })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('transport waiting')))
     transportAbort.abort()
     await assert.rejects(transportCanceled)
     await page.waitForFunction(() => window.playgroundState().run.status === 'stopped')
-    const loop = await client.callTool({ arguments: { code: 'while (true) {}', timeoutMs: 300 }, name: 'codemode' })
+    const loop = await client.callTool({ arguments: { code: 'while (true) {}', timeoutMs: 300 }, name: 'execute' })
     assert.equal(loop.isError, true)
     assert.match(loop.content.at(-1).text, /timed out|interrupted/)
-    const recovered = await client.callTool({ arguments: { code: 'return 7;' }, name: 'codemode' })
+    const recovered = await client.callTool({ arguments: { code: 'return 7;' }, name: 'execute' })
     assert.equal(recovered.isError, false)
-    const allocation = await client.callTool({ arguments: { code: 'const values = new Array(1000000).fill("x"); text(values.length);' }, name: 'codemode' })
+    const allocation = await client.callTool({ arguments: { code: 'const values = new Array(1000000).fill("x"); text(values.length);' }, name: 'execute' })
     assert.equal(allocation.isError, false, JSON.stringify(allocation))
     assert.ok(allocation.content.some(item => item.text === '1000000'))
     // NOTICE(codemode-trace-granularity): the owner retained complete statement
@@ -420,15 +422,15 @@ async function verifyBrowser() {
     // performance guarantee of the normal browser check.
     if (process.env.AUV_CODEMODE_BENCHMARK) {
       const busyStart = Date.now()
-      const busy = await client.callTool({ arguments: { code: 'let sum=0; for(let i=0;i<1000000;i++){ sum+=i; } text(sum);', timeoutMs: 10000 }, name: 'codemode' })
+      const busy = await client.callTool({ arguments: { code: 'let sum=0; for(let i=0;i<1000000;i++){ sum+=i; } text(sum);', timeoutMs: 10000 }, name: 'execute' })
       console.info('Million-iteration browser loop:', Date.now() - busyStart, 'ms')
       assert.equal(busy.isError, false, JSON.stringify(busy))
       assert.ok(busy.content.some(item => item.text === '499999500000'))
     }
-    const malformed = await client.callTool({ arguments: { code: 'await auv.displays.captureRegion({ x: 0, y: 0, width: -10, height: -10 });' }, name: 'codemode' })
+    const malformed = await client.callTool({ arguments: { code: 'await auv.displays.captureRegion({ x: 0, y: 0, width: -10, height: -10 });' }, name: 'execute' })
     assert.equal(malformed.isError, true)
     assert.match(malformed.content.at(-1).text, /positive/)
-    const empty = await client.callTool({ arguments: { code: 'const win = await auv.windows.get("w-counter"); text((await win.findText("")).matches.length); text((await win.findText(" ")).matches.length);' }, name: 'codemode' })
+    const empty = await client.callTool({ arguments: { code: 'const win = await auv.windows.get("w-counter"); text((await win.findText("")).matches.length); text((await win.findText(" ")).matches.length);' }, name: 'execute' })
     assert.equal(empty.isError, false)
     assert.equal(empty.content.filter(item => item.text === '0').length, 2)
     const editorRun = await page.evaluate(async () => (await import('/playground/src/runtime/session.ts')).session.run({ mode: 'run', source: 'editorValue;', startLine: 1 }))

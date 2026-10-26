@@ -28,10 +28,10 @@ export function presentTool(tool: AcpToolCallRecord['value']) {
   // `anomalyco/opencode@32b57015`, using metadata.error and toolCalls[].status.
   const error = tool.status === 'failed' || typeof raw.error === 'string' || metadata.error === true || nested.some(call => call.status === 'error')
   const running = tool.status === 'pending' || tool.status === 'in_progress'
-  const names = [...new Set(nested.flatMap(call => typeof call.tool === 'string' ? [call.tool === 'auv-playground.codemode' ? 'Playground' : call.tool] : []))]
+  const names = [...new Set(nested.flatMap(call => typeof call.tool === 'string' ? [call.tool === 'auv-playground.execute' ? 'Playground' : call.tool] : []))]
   const title = names.length
     ? names.join(', ')
-    : tool.title === 'execute' ? 'Run script' : tool.title === 'codemode' ? 'Playground' : tool.title || kindTitles[tool.kind ?? 'other']
+    : tool.title === 'execute' ? 'Run script' : tool.title || kindTitles[tool.kind ?? 'other']
   const output = tool.content?.flatMap(part => part.type === 'content' && part.content.type === 'text' ? [part.content.text] : []).join('\n')
   const code = record(tool.rawInput).code
   return {

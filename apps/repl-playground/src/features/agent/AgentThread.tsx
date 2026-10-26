@@ -6,7 +6,6 @@ import { useState } from 'react'
 
 import { iconButtonClassName } from '../../components/icon-button-class'
 import { IconButton } from '../../components/IconButton'
-import { isSandboxBriefing } from './agent-context'
 import { AgentActivity, AgentTool } from './AgentActivity'
 import { MarkdownText } from './MarkdownText'
 
@@ -89,21 +88,11 @@ const AgentReasoning: ReasoningMessagePartComponent = ({ text }) => {
   )
 }
 
-const UserText: TextMessagePartComponent = ({ text }) => {
-  if (isSandboxBriefing(text)) {
-    return (
-      <details className="text-[11.5px] text-fg-subtle">
-        <summary className="cursor-pointer">Sandbox briefing</summary>
-        <pre className="text-[11px] font-mono mt-1 whitespace-pre-wrap">{text}</pre>
-      </details>
-    )
-  }
-  return (
-    <div className="flex justify-end">
-      <div className="text-[13px] leading-[1.65] px-3.5 py-2.5 rounded-[12px_12px_3px_12px] bg-surface-2 max-w-[92%] whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
-    </div>
-  )
-}
+const UserText: TextMessagePartComponent = ({ text }) => (
+  <div className="flex justify-end">
+    <div className="text-[13px] leading-[1.65] px-3.5 py-2.5 rounded-[12px_12px_3px_12px] bg-surface-2 max-w-[92%] whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>
+  </div>
+)
 
 function AgentMessage() {
   const role = useAuiState(s => s.message.role)

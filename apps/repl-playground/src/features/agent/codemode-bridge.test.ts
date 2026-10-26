@@ -50,7 +50,7 @@ function createAgentFixture(host: CodeModeHost) {
   const adapter = new SdkAcpClientAdapter(() => raw)
   const controller = new AcpThreadController({
     connection: {
-      adapter: { connect: async options => codeModeConnection(await adapter.connect(options), host, tools, () => 'briefing') },
+      adapter: { connect: async options => codeModeConnection(await adapter.connect(options), host, tools) },
       type: 'adapter',
     },
     onThreadIdChange: sessionId => host.setSession(sessionId),
@@ -64,11 +64,13 @@ describe('codemode browser MCP host', () => {
   it('serves standard MCP before ACP session creation and binds execution to the active session', async () => {
     const host = new CodeModeHost()
     const client = await connectTools(host)
-    expect((await client.listTools()).tools).toMatchObject([{ name: 'codemode' }])
-    expect((await client.callTool({ arguments: { code: 'return 1' }, name: 'codemode' })).isError).toBe(true)
+    const { tools } = await client.listTools()
+    expect(tools.map(tool => tool.name)).toEqual(['execute'])
+    expect(tools[0].description).toContain('text(api.help())')
+    expect((await client.callTool({ arguments: { code: 'return 1' }, name: 'execute' })).isError).toBe(true)
     host.setSession('one')
     execution.run.mockResolvedValueOnce({ codemode: { content: [{ text: 'result', type: 'text' }], store: {} }, status: 'ok' })
-    expect(await client.callTool({ arguments: { code: 'text(1)' }, name: 'codemode' })).toMatchObject({ content: [{ text: 'result' }, { text: expect.stringContaining('Script completed') }], isError: false })
+    expect(await client.callTool({ arguments: { code: 'text(1)' }, name: 'execute' })).toMatchObject({ content: [{ text: 'result' }, { text: expect.stringContaining('Script completed') }], isError: false })
     expect(execution.run.mock.lastCall?.[0].codemode.timeoutMs).toBe(30000)
   })
 
@@ -81,7 +83,7 @@ describe('codemode browser MCP host', () => {
       finish = resolve
     }))
     const controller = new AbortController()
-    const call = client.callTool({ arguments: { code: 'await operation()' }, name: 'codemode' }, undefined, { signal: controller.signal })
+    const call = client.callTool({ arguments: { code: 'await operation()' }, name: 'execute' }, undefined, { signal: controller.signal })
     const rejection = expect(call).rejects.toThrow()
     await vi.waitFor(() => expect(execution.run.mock.lastCall?.[0].source).toBe('await operation()'))
     const signal = execution.run.mock.lastCall?.[0].signal as AbortSignal
@@ -98,16 +100,16 @@ describe('codemode browser MCP host', () => {
     const client = await connectTools(host)
     host.setSession('one')
     execution.run.mockResolvedValueOnce({ codemode: { content: [{ text: 'selected', type: 'text' }], store: { windowId: 'counter' } }, status: 'ok' })
-    expect((await client.callTool({ arguments: { code: 'text(1)', timeoutMs: 1000 }, name: 'codemode' })).isError).toBe(false)
+    expect((await client.callTool({ arguments: { code: 'text(1)', timeoutMs: 1000 }, name: 'execute' })).isError).toBe(false)
     execution.run.mockResolvedValueOnce({ codemode: { content: [{ text: 'partial', type: 'text' }], store: { windowId: 'bad' } }, message: 'failed', status: 'error' })
-    const failed = await client.callTool({ arguments: { code: 'throw 1', timeoutMs: 1000 }, name: 'codemode' })
+    const failed = await client.callTool({ arguments: { code: 'throw 1', timeoutMs: 1000 }, name: 'execute' })
     expect(failed).toMatchObject({ content: [{ text: 'partial' }, { text: 'Script failed: failed' }], isError: true })
     expect(execution.run.mock.lastCall?.[0].codemode.store).toEqual({ windowId: 'counter' })
     host.setSession(undefined)
-    expect((await client.callTool({ arguments: { code: 'text(1)' }, name: 'codemode' })).isError).toBe(true)
+    expect((await client.callTool({ arguments: { code: 'text(1)' }, name: 'execute' })).isError).toBe(true)
     host.setSession('two')
     execution.run.mockResolvedValueOnce({ codemode: { content: [], store: {} }, status: 'ok' })
-    await client.callTool({ arguments: { code: 'text(1)', timeoutMs: 1000 }, name: 'codemode' })
+    await client.callTool({ arguments: { code: 'text(1)', timeoutMs: 1000 }, name: 'execute' })
     expect(execution.run.mock.lastCall?.[0].codemode.store).toEqual({})
   })
 
@@ -119,17 +121,17 @@ describe('codemode browser MCP host', () => {
     execution.run.mockImplementationOnce(() => new Promise((resolve) => {
       finish = resolve
     }))
-    const first = client.callTool({ arguments: { code: 'await operation()', timeoutMs: 1000 }, name: 'codemode' })
+    const first = client.callTool({ arguments: { code: 'await operation()', timeoutMs: 1000 }, name: 'execute' })
     await vi.waitFor(() => expect(execution.run.mock.lastCall?.[0].source).toBe('await operation()'))
     const signal = execution.run.mock.lastCall?.[0].signal as AbortSignal
-    expect((await client.callTool({ arguments: { code: 'text(1)' }, name: 'codemode' })).isError).toBe(true)
+    expect((await client.callTool({ arguments: { code: 'text(1)' }, name: 'execute' })).isError).toBe(true)
     expect(signal.aborted).toBe(false)
     host.setSession('two')
     expect(signal.aborted).toBe(true)
     finish({ codemode: { content: [], store: { stale: true } }, status: 'ok' })
     expect((await first).isError).toBe(true)
     execution.run.mockResolvedValueOnce({ codemode: { content: [], store: {} }, status: 'ok' })
-    await client.callTool({ arguments: { code: 'return load("stale")' }, name: 'codemode' })
+    await client.callTool({ arguments: { code: 'return load("stale")' }, name: 'execute' })
     expect(execution.run.mock.lastCall?.[0].codemode.store).toEqual({})
   })
 
@@ -138,10 +140,10 @@ describe('codemode browser MCP host', () => {
     const client = await connectTools(host)
     host.setSession('one')
     execution.run.mockResolvedValueOnce({ reason: 'timeout', status: 'stopped' })
-    const timeout = await client.callTool({ arguments: { code: 'while (true) {}', timeoutMs: 300 }, name: 'codemode' })
+    const timeout = await client.callTool({ arguments: { code: 'while (true) {}', timeoutMs: 300 }, name: 'execute' })
     expect(timeout.content).toEqual([{ text: 'Script timed out after 300 ms. Delivered inputs are not undone.', type: 'text' }])
     execution.run.mockResolvedValueOnce({ reason: 'canceled', status: 'stopped' })
-    const canceled = await client.callTool({ arguments: { code: 'await operation()', timeoutMs: 300 }, name: 'codemode' })
+    const canceled = await client.callTool({ arguments: { code: 'await operation()', timeoutMs: 300 }, name: 'execute' })
     expect(canceled.content).toEqual([{ text: 'Script canceled. Delivered inputs are not undone.', type: 'text' }])
   })
 
@@ -154,13 +156,12 @@ describe('codemode browser MCP host', () => {
     await controller.createSession()
     expect(messages.find(message => 'method' in message && message.method === 'session/new')).toMatchObject({ params: { mcpServers: [{ headers: tools.headers, name: 'auv-playground', type: 'http', url: tools.url }] } })
     execution.run.mockResolvedValueOnce({ codemode: { content: [], store: {} }, status: 'ok' })
-    expect((await client.callTool({ arguments: { code: 'return 1', timeoutMs: 1000 }, name: 'codemode' })).isError).toBe(false)
+    expect((await client.callTool({ arguments: { code: 'return 1', timeoutMs: 1000 }, name: 'execute' })).isError).toBe(false)
     incoming.close()
     await vi.waitFor(() => expect(tools.close).toHaveBeenCalledOnce())
   })
 
-  // Briefing state is scoped to the active session on a shared ACP connection.
-  it('attaches the sandbox briefing to each session first prompt', async () => {
+  it('passes user prompts unchanged across sessions', async () => {
     const host = new CodeModeHost()
     const { controller, messages } = createAgentFixture(host)
     await controller.connect()
@@ -171,9 +172,11 @@ describe('codemode browser MCP host', () => {
     const second = await controller.createSession()
     await controller.prompt(second, prompt)
     const requests = messages.filter(message => 'method' in message && message.method === 'session/prompt')
-    expect(requests[0]).toMatchObject({ params: { prompt: [{ text: 'briefing' }, { text: 'hi' }], sessionId: first } })
-    expect(requests[1]).toMatchObject({ params: { prompt: [{ text: 'hi' }] } })
-    expect(requests[2]).toMatchObject({ params: { prompt: [{ text: 'briefing' }, { text: 'hi' }], sessionId: second } })
+    expect(requests).toMatchObject([
+      { params: { prompt, sessionId: first } },
+      { params: { prompt, sessionId: first } },
+      { params: { prompt, sessionId: second } },
+    ])
   })
 
   it('cancels codemode with the ACP turn and closes MCP on disconnect', async () => {
@@ -186,7 +189,7 @@ describe('codemode browser MCP host', () => {
     execution.run.mockImplementationOnce(() => new Promise((resolve) => {
       finish = resolve
     }))
-    const pending = client.callTool({ arguments: { code: 'await operation()', timeoutMs: 1000 }, name: 'codemode' })
+    const pending = client.callTool({ arguments: { code: 'await operation()', timeoutMs: 1000 }, name: 'execute' })
     await vi.waitFor(() => expect(execution.run.mock.lastCall?.[0].source).toBe('await operation()'))
     const signal = execution.run.mock.lastCall?.[0].signal as AbortSignal
     await controller.cancel(sessionId)

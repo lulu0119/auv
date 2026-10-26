@@ -3,6 +3,9 @@
 Status: diagnosis complete. The owner approved the two small fixes described below.
 The later [Agent presentation change](2026-10-25-playground-agent-ui.md) groups tool activity and keeps returned errors and screenshot previews visible.
 
+NOTICE: The current `execute` tool description and SDK help supply execution instructions.
+The [HTTP MCP contract](2026-10-25-playground-http-mcp-design.md) replaces the session briefing described in this review.
+
 ## Evidence
 
 Reviewed OpenCode session `ses_e8e3d5327ffekFTXW1QUvtzb2x`,

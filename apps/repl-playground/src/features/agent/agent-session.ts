@@ -5,7 +5,6 @@ import { AcpThreadController, SdkAcpClientAdapter } from '@hafbit/react-acp/core
 import { create } from 'zustand'
 
 import { version } from '../../../package.json'
-import { sandboxBriefing } from './agent-context'
 import { codeModeConnection, CodeModeHost } from './codemode-bridge'
 import { relayUrl, serveMcp } from './exterior'
 
@@ -40,7 +39,7 @@ export function connectAgent(account: AccountSession, target: AgentTarget): void
               }
             })
             const acp = await new SdkAcpClientAdapter(() => createWebSocketStream(url)).connect(options)
-            return codeModeConnection(acp, codemode, tools, sandboxBriefing)
+            return codeModeConnection(acp, codemode, tools)
           }
           catch (cause) {
             tools.close()

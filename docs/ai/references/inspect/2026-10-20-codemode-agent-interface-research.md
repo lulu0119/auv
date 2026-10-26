@@ -2,6 +2,7 @@
 
 NOTICE: Local proxy citations describe a retired transport implementation.
 The [HTTP MCP migration](2026-10-25-playground-http-mcp-design.md) records the current agent connection contract.
+The current Playground tool is `execute`. Its description replaces the first-prompt briefing described below.
 
 Source inspection date: 2026-10-20.
 
@@ -228,7 +229,7 @@ Sources: [value conversion](../../../../apps/repl-playground/src/workers/codemod
 The first prompt contains environment instructions and starter SDK signatures.
 The VM supplies `api.help()`, `api.search(...)`, and `api.describe(...)`.
 Their JSON catalog comes from the SDK TypeScript declarations and documentation.
-Sources: [briefing](../../../../apps/repl-playground/src/features/agent/agent-context.ts),
+Sources: [former briefing](https://github.com/lulu0119/auv/blob/4596f0ce8010c4bdbaec984526ac025d4eb75617/apps/repl-playground/src/features/agent/agent-context.ts),
 [catalog generation](../../../../apps/repl-playground/agent/help-catalog.ts),
 [metadata queries](../../../../apps/repl-playground/src/script-api/codemode-help.ts).
 
