@@ -28,6 +28,8 @@ The agent must advertise `agentCapabilities.mcpCapabilities.http`.
 Tool discovery can finish before ACP session creation returns.
 Execution requires an active Playground ACP session.
 The MCP SDK handles initialization, tool requests, and cancellation notifications.
+Host tests send ordinary MCP tool requests through linked transports.
+Execution is private, and the host resolves its active ACP session internally.
 The browser no longer handles experimental `mcp/message` requests.
 The agent device runs its ordinary ACP agent, without a Playground startup wrapper.
 
@@ -80,6 +82,11 @@ The migration preserves these execution rules:
 - One mutable desktop runs one script at a time.
 - The editor keeps its separate REPL state.
 
+`ExecSession` keeps the editor worker until Reset.
+Each codemode call owns a temporary worker, RPC connection, and SDK port.
+Cleanup closes those temporary resources after success, failure, cancellation, or timeout.
+The active worker determines whether a script is running and which execution receives control commands.
+
 The VM validates each store update before replacing its local state.
 It returns the state only after success, so the input store remains unchanged.
 
@@ -103,6 +110,10 @@ Unit tests also exercise the MCP host with the MCP SDK's real client and linked 
 The 2026-10-26 simplification passed all 101 unit tests, TypeScript checking, the production build, changed-file ESLint, and the browser harness.
 The unit tests use the real ACP adapter and controller for session setup, briefing, cancellation, and connection cleanup.
 The browser harness also rejects session-list requests when the agent does not advertise that capability.
+
+The interface and worker ownership refactor also passes these checks.
+The browser harness cancels codemode through Reset and resumes an editor step afterward.
+The editor variable survives failures, cancellation, Reset during codemode, and timeout.
 
 Evidence level: live remote Relay and ordinary local OpenCode 2.0.26, with model inference.
 The actual Playground page connected to `https://relay.apps.superpowerlulu.win`.

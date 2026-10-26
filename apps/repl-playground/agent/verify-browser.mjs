@@ -397,6 +397,10 @@ async function verifyBrowser() {
     const canceledResult = await canceled
     assert.equal(canceledResult.isError, true)
     assert.ok(canceledResult.content.some(item => item.type === 'text' && item.text === 'waiting'), JSON.stringify(canceledResult))
+    const reset = client.callTool({ arguments: { code: 'text("reset waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' })
+    await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('reset waiting')))
+    await page.evaluate(async () => (await import('/playground/src/runtime/session.ts')).session.reset())
+    assert.equal((await reset).isError, true, 'Reset during codemode must cancel that execution and preserve the editor REPL')
     const transportAbort = new AbortController()
     const transportCanceled = client.callTool({ arguments: { code: 'text("transport waiting"); await new Promise(() => {});', timeoutMs: 10000 }, name: 'codemode' }, undefined, { signal: transportAbort.signal })
     await page.waitForFunction(() => window.playgroundState().logs.some(log => log.values.includes('transport waiting')))
@@ -429,9 +433,20 @@ async function verifyBrowser() {
     assert.equal(empty.content.filter(item => item.text === '0').length, 2)
     const editorRun = await page.evaluate(async () => (await import('/playground/src/runtime/session.ts')).session.run({ mode: 'run', source: 'editorValue;', startLine: 1 }))
     assert.equal(editorRun.value, 99)
+    await page.evaluate(async () => {
+      const { session } = await import('/playground/src/runtime/session.ts')
+      window.editorStep = session.run({ mode: 'step', source: 'editorValue + 1;', startLine: 1 })
+    })
+    await page.waitForFunction(() => window.playgroundState().run.status === 'paused')
+    const stepped = await page.evaluate(async () => {
+      const { session } = await import('/playground/src/runtime/session.ts')
+      session.resume('continue')
+      return window.editorStep
+    })
+    assert.equal(stepped.value, 100, 'The persistent editor worker must still support stepping after codemode cleanup')
     assert.equal(errors.length, 0, errors.join('\n'))
     const agentUi = await verifyAgentConnection(browser, vite.resolvedUrls.local[0], relay, result.content.find(item => item.type === 'image'))
-    console.info(JSON.stringify({ agentUi, calls, cancellation: true, continuousHistoryAndDesktop: true, discoveryAndHelpExample: true, editorStatePreserved: true, images: true, mountedTabsPreserved: true, sourceHistory: true, stateRollback: true, timeoutAndRecovery: true, viewportFit: true }, null, 2))
+    console.info(JSON.stringify({ agentUi, calls, cancellation: true, continuousHistoryAndDesktop: true, discoveryAndHelpExample: true, editorStatePreserved: true, editorStepping: true, images: true, mountedTabsPreserved: true, resetDuringCodemode: true, sourceHistory: true, stateRollback: true, timeoutAndRecovery: true, viewportFit: true }, null, 2))
   }
   finally {
     await client.close()

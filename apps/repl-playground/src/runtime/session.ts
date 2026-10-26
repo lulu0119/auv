@@ -42,6 +42,13 @@ export interface RunOptions {
   startLine: number
 }
 
+/** One worker and the RPC channels that share its lifetime. */
+interface ExecutionWorker {
+  exec: BirpcReturn<ExecWorkerApi, HostApi>
+  port: MessagePort
+  worker: Worker
+}
+
 /**
  * Collects high-frequency hook events (thousands per second in tight loops)
  * and commits them to the store once per animation frame.
@@ -81,29 +88,25 @@ class EventBatch {
  */
 class ExecSession {
   get running(): boolean {
-    return this.#running
+    return this.#active !== undefined
   }
 
+  #active?: ExecutionWorker
   #batch: EventBatch
   #bindHits: number[] = []
   #binds: BindSite[] = []
   #cellId = 0
-  #codemode = false
   #codeOutput: CodeModeState['content'] = []
-  #exec!: BirpcReturn<ExecWorkerApi, HostApi>
+  #editor: ExecutionWorker
   #lastLine: null | number = null
   #lineHits = new Map<number, number>()
   #liveTimer?: number
   #recording?: Recording
   #runAbort?: AbortController
   #runBackend: null | RunBackend = null
-  #running = false
-
-  #sdkPort?: MessagePort
   #seq = 0
   #steps: StepSite[] = []
   #timer?: StepTimer
-  #worker?: Worker
 
   constructor() {
     this.#batch = new EventBatch((batch) => {
@@ -118,7 +121,7 @@ class ExecSession {
         }
       })
     })
-    this.#spawn()
+    this.#editor = this.#spawn()
   }
 
   /** Reloads the accessibility tree from the active backend, when supported. */
@@ -133,37 +136,35 @@ class ExecSession {
 
   /** Terminates the worker (also escapes infinite sync loops) and clears REPL state. */
   reset(): void {
-    if (this.#codemode) {
+    if (this.#active && this.#active !== this.#editor) {
       this.stop()
       return
     }
-    this.#worker?.terminate()
-    this.#running = false
+    this.#editor.worker.terminate()
+    this.#active = undefined
     actions.resetSession()
-    this.#spawn()
+    this.#editor = this.#spawn()
   }
 
   // TODO(step-over): `step` pauses at the next hook anywhere, so it steps into
   // called async functions. Step-over needs call-depth tracking in the stepper
   // (enter/exit hooks around function bodies).
   resume(mode: ResumeMode): void {
-    this.#exec.resume(mode)
+    const worker = this.#active ?? this.#editor
+    worker.exec.resume(mode)
   }
 
   async run(options: RunOptions): Promise<RunOutcome> {
-    if (this.#running)
+    if (this.running)
       return { message: 'Another playground execution is running.', status: 'error' }
     const live = usePlayground.getState().backend
     if (options.replay && !this.#recording)
       return { message: 'No recording is available.', status: 'error' }
     if (options.signal?.aborted)
       return { status: 'stopped' }
-    this.#running = true
-    this.#codemode = options.codemode !== undefined
     this.#codeOutput = []
-    const editor = { exec: this.#exec, port: this.#sdkPort, worker: this.#worker }
-    if (options.codemode)
-      this.#spawn()
+    const worker = options.codemode ? this.#spawn() : this.#editor
+    this.#active = worker
     const abort = new AbortController()
     this.#runAbort = abort
     const cancel = () => this.stop()
@@ -196,7 +197,7 @@ class ExecSession {
       abort.signal.throwIfAborted()
       const runId = await this.#runBackend?.beginRun()
       actions.patchRun({ runId, status: 'running' })
-      const executing = this.#exec.run({
+      const executing = worker.exec.run({
         binds: compiled.binds,
         breakpoints: usePlayground.getState().breakpoints,
         code: compiled.code,
@@ -259,21 +260,18 @@ class ExecSession {
       clearTimeout(timer)
       options.signal?.removeEventListener('abort', cancel)
       if (options.codemode) {
-        this.#worker?.terminate()
-        this.#sdkPort?.close()
-        this.#exec.$close()
-        this.#exec = editor.exec
-        this.#worker = editor.worker
-        this.#sdkPort = editor.port
+        worker.worker.terminate()
+        worker.port.close()
+        worker.exec.$close()
       }
       this.#runAbort = undefined
-      this.#codemode = false
-      this.#running = false
+      this.#active = undefined
     }
   }
 
   setBreakpoints(lines: number[]): void {
-    this.#exec.setBreakpoints(lines)
+    const worker = this.#active ?? this.#editor
+    worker.exec.setBreakpoints(lines)
   }
 
   /** Polls display captures into the canvas while live mode is on. */
@@ -301,12 +299,12 @@ class ExecSession {
   }
 
   stop(): void {
-    if (this.#codemode) {
+    if (this.#active && this.#active !== this.#editor) {
       this.#runAbort?.abort()
-      this.#worker?.terminate()
+      this.#active.worker.terminate()
       return
     }
-    this.#exec.stop()
+    this.#editor.exec.stop()
   }
 
   #log(level: Parameters<HostApi['onLog']>[0], values: unknown[], line: null | number, label?: string): void {
@@ -320,13 +318,11 @@ class ExecSession {
     return seq
   }
 
-  #spawn(): void {
+  #spawn(): ExecutionWorker {
     const worker = new Worker(new URL('../workers/exec.worker.ts', import.meta.url), { type: 'module' })
-    this.#worker = worker
     const lineOf = (stepId: null | number) => stepId === null ? null : this.#steps[stepId]?.line ?? null
     // Scripts' `auv` calls (`@auv-js/sdk`) arrive here encoded, on their own port.
     const channel = new MessageChannel()
-    this.#sdkPort = channel.port1
     worker.postMessage({ type: SDK_PORT_MESSAGE }, [channel.port2])
     serveBridge(createWorkerChannel(channel.port1 as unknown as Worker).context, {
       record: async (start) => {
@@ -386,7 +382,7 @@ class ExecSession {
           })
         }
       },
-      target: executionId => executionId !== this.#cellId || !this.#running || this.#runAbort?.signal.aborted
+      target: executionId => executionId !== this.#cellId || !this.running || this.#runAbort?.signal.aborted
         ? 'This script execution has ended.'
         : this.#runBackend
           ? { ...this.#runBackend.sdk().target, signal: this.#runAbort?.signal }
@@ -449,13 +445,14 @@ class ExecSession {
         usePlayground.setState({ vars })
       },
     }
-    this.#exec = createBirpc<ExecWorkerApi, HostApi>(host, {
+    const exec = createBirpc<ExecWorkerApi, HostApi>(host, {
       // Control messages to the worker are fire-and-forget; only `run` returns.
       eventNames: ['resume', 'setBreakpoints', 'stop'],
       on: fn => worker.addEventListener('message', event => fn(event.data)),
       post: data => worker.postMessage(data),
       timeout: 24 * 60 * 60_000,
     })
+    return { exec, port: channel.port1, worker }
   }
 }
 
