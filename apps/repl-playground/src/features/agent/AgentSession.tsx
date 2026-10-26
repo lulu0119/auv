@@ -33,12 +33,6 @@ export function AgentSession({ connection, onDisconnect, onRetry }: {
   )
 }
 
-function AuthPanel() {
-  // TODO(agent-auth): interactive ACP authentication requires an approved
-  // agent-authentication flow; this panel reports the requirement.
-  return <Empty>The agent requires authentication that this tab cannot complete.</Empty>
-}
-
 /** Human-readable form of the thread's connection error, when it carries one. */
 function describeConnectionError(value: unknown): string {
   if (!value)
@@ -63,8 +57,10 @@ function SessionBody({ connection, onRetry }: {
   const thread = useAcpThreadState()
   const status = thread.connectionStatus
 
+  // TODO(agent-auth): interactive ACP authentication requires an approved
+  // agent-authentication flow; this panel reports the requirement.
   if (status === 'auth-required')
-    return <AuthPanel />
+    return <Empty>The agent requires authentication that this tab cannot complete.</Empty>
   if (connection.error || status === 'error' || status === 'closed') {
     const hint = describeConnectionError(thread.connectionError)
     const message = connection.error || hint || status
