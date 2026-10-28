@@ -1,9 +1,30 @@
+import type { Plugin } from 'vite'
+
 import react from '@vitejs/plugin-react'
 import UnoCSS from 'unocss/vite'
 
 import { defineConfig } from 'vite'
 
 import { codeModeHelpPlugin } from './agent/help-catalog'
+
+// NOTICE(oauth-callback-page): Cloudflare serves this file at
+// `/playground/oauth/callback` and keeps that address. A missing path falls
+// back to the docs index, and rewriting it onto `/playground/index.html`
+// redirects to `/playground/` before Exterior can redeem the code.
+function oauthCallbackPage(): Plugin {
+  return {
+    apply: 'build',
+    // Run after Vite emits index.html so both routes use the same built entry.
+    enforce: 'post',
+    generateBundle(_, bundle) {
+      const index = bundle['index.html']
+      if (index?.type !== 'asset')
+        this.error('The Playground build must emit index.html for the OAuth callback.')
+      this.emitFile({ fileName: 'oauth/callback.html', source: index.source, type: 'asset' })
+    },
+    name: 'oauth-callback-page',
+  }
+}
 
 export default defineConfig({
   base: '/playground/',
@@ -13,7 +34,7 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@jitl/quickjs-singlefile-browser-release-sync', '@moeru/eventa/adapters/webworkers/worker', '@typescript/vfs', 'acorn', 'magic-string', 'quickjs-emscripten-core', 'ts-blank-space', 'typescript'],
   },
-  plugins: [codeModeHelpPlugin(), UnoCSS(), react()],
+  plugins: [codeModeHelpPlugin(), UnoCSS(), react(), oauthCallbackPage()],
   server: {
     port: 5180,
   },
