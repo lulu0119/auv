@@ -8,6 +8,7 @@ import { createBirpc } from 'birpc'
 
 import * as sdk from '@auv-js/sdk'
 
+import { codeModeLimits } from '../runtime/codemode-limits'
 import { HOST_EVENTS } from '../runtime/protocol'
 import { createBridgeTransport, SDK_PORT_MESSAGE } from '../runtime/sdk-bridge'
 import { codeModeSdk } from '../script-api/codemode-sdk'
@@ -65,11 +66,11 @@ const api: ExecWorkerApi = {
           __stepSync: globals.__stepSync,
           auv: runner,
           image: async (capture: sdk.CaptureTarget, options: sdk.CaptureImageOptions = {}) => {
-            const maxSize = options.maxSize ?? { height: 1024, width: 1024 }
+            const maxSize = options.maxSize ?? { height: codeModeLimits.maxImageDimension, width: codeModeLimits.maxImageDimension }
             const encoding = options.encoding ?? sdk.ImageEncoding.PNG
-            if (![maxSize.height, maxSize.width].every(size => typeof size === 'number' && Number.isInteger(size) && size > 0 && size <= 1024)
+            if (![maxSize.height, maxSize.width].every(size => typeof size === 'number' && Number.isInteger(size) && size > 0 && size <= codeModeLimits.maxImageDimension)
               || (encoding !== sdk.ImageEncoding.PNG && encoding !== sdk.ImageEncoding.JPEG)) {
-              throw new Error('image() requires PNG or JPEG and positive maxSize dimensions at most 1024')
+              throw new Error(`image() requires PNG or JPEG and positive maxSize dimensions at most ${codeModeLimits.maxImageDimension}`)
             }
             const pixels = await runner.captures.image(capture, { ...options, encoding, maxSize })
             let binary = ''

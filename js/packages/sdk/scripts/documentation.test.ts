@@ -66,11 +66,22 @@ describe('sdk documentation', () => {
     expect(() => describeSdk({ omitMethods: ['WindowClient.notReal'], runner: 'runner' })).toThrow('Cannot omit unknown SDK methods: WindowClient.notReal')
   })
 
-  it('shows the host name in examples that the SDK writes with `runner`', () => {
+  it('binds method paths to the host while preserving SDK examples', () => {
     const host = describeSdk({ runner: 'auv' })
     const resolve = host.entries.find(entry => entry.path === 'auv.windows.resolve')
-    expect(resolve?.examples[0]).toContain('await auv.windows.resolve(')
-    expect(resolve?.examples[0]).not.toMatch(/\brunner\b/)
+    expect(resolve?.signature).toMatch(/^auv\.windows\.resolve\(/)
+    expect(resolve?.examples).toEqual(docs.entries.find(entry => entry.path === 'runner.windows.resolve')?.examples)
+    expect(resolve?.examples[0]).toContain('await runner.windows.resolve(')
+  })
+
+  it('describes selected public exports without reading host source', () => {
+    const selected = describeSdk({ helpers: ['region', 'Position', 'InputPolicy'], runner: 'runner' })
+    const entries = selected.entries.filter(entry => entry.path.startsWith('sdk.'))
+    expect(entries.map(entry => entry.path)).toEqual(['sdk.region', 'sdk.Position.display', 'sdk.Position.screen', 'sdk.Position.window', 'sdk.InputPolicy'])
+    expect(entries[0].description).not.toBe('')
+    expect(entries[0].signature).toContain('rect: RectLike')
+    expect(selected.types.InputPolicy.definition).toContain('BACKGROUND_ONLY = 1')
+    expect(() => describeSdk({ helpers: ['notReal'], runner: 'runner' })).toThrow('Cannot find SDK export: notReal')
   })
 
   // Examples are documentation that an agent copies, so they must compile against the contract they describe.

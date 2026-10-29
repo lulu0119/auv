@@ -1,11 +1,10 @@
 import type { SdkDocumentation, SdkEntry } from '@auv-js/sdk/documentation'
 import type { Plugin } from 'vite'
 
-import { fileURLToPath } from 'node:url'
-
 import { describeSdk } from '@auv-js/sdk/documentation'
 
-const globalsPath = fileURLToPath(new URL('../src/script-api/codemode-sdk.ts', import.meta.url))
+import { codeModeExports } from '../src/script-api/codemode-exports'
+
 const virtualId = 'virtual:auv-codemode-help'
 
 // Streams, generators, and raw pixels cannot cross the VM, so help omits them.
@@ -48,15 +47,18 @@ export function codeModeHelpPlugin(): Plugin {
         return
       if (!catalog) {
         // Add VM policy and globals to the SDK contract. Compiler objects never enter the VM.
-        const sdk = describeSdk({
-          helpers: { file: globalsPath, name: 'codeModeSdk', path: 'sdk' },
+        catalog = describeSdk({
+          helpers: codeModeExports,
           // Callbacks and AbortSignal cannot cross the VM; the host cancels the whole execution.
           omitFields: ['onUpdate', 'signal', 'until'],
           omitMethods,
           onSource: path => sources.add(path.replaceAll('\\', '/')),
           runner: 'auv',
         })
-        catalog = { entries: [...sdk.entries, ...globals], types: sdk.types }
+        // SDK examples use `runner`; bind it to this VM's client without rewriting source code.
+        for (const entry of catalog.entries)
+          entry.examples = entry.examples.map(example => `const runner = auv;\n${example}`)
+        catalog.entries.push(...globals)
       }
       for (const source of sources) this.addWatchFile(source)
       return `export default ${JSON.stringify(catalog)}`

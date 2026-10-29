@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const driverPath = fileURLToPath(new URL('../src/apis/auv/driver.ts', import.meta.url))
+const indexPath = fileURLToPath(new URL('../src/web/index.ts', import.meta.url))
 
 export interface SdkDocumentation {
   entries: SdkEntry[]
@@ -10,8 +11,8 @@ export interface SdkDocumentation {
 }
 
 export interface SdkDocumentationOptions {
-  /** An exported object of SDK helpers, documented under `path`. */
-  helpers?: { file: string, name: string, path: string }
+  /** Public SDK export names to document under `sdk`. */
+  helpers?: readonly string[]
   /** Fields the host cannot pass, such as callbacks. */
   omitFields?: readonly string[]
   /** Method paths the host cannot call, such as `WindowClient.scrollStream`. They leave entries and resource definitions. */
@@ -51,8 +52,7 @@ const helperAliases = ['Init', 'InputFields', 'MessageInit', 'Omit', 'Pick', 'Sh
 // TODO(codemode-runner-docs): live RPC docs need an SDK-to-RPC mapping. Keep
 // source-derived SDK docs until that mapping has an owner-approved consumer.
 export function describeSdk(options: SdkDocumentationOptions): SdkDocumentation {
-  const roots = [driverPath, ...(options.helpers ? [options.helpers.file] : [])]
-  const program = ts.createProgram(roots, {
+  const program = ts.createProgram([driverPath, ...(options.helpers ? [indexPath] : [])], {
     customConditions: ['browser'],
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
@@ -68,8 +68,6 @@ export function describeSdk(options: SdkDocumentationOptions): SdkDocumentation 
     if (source.fileName.replaceAll('\\', '/').includes('/sdk/src/'))
       options.onSource?.(source.fileName)
   }
-  if (options.helpers)
-    options.onSource?.(options.helpers.file)
   const omitted = new Set([...messageFields, ...(options.omitFields ?? [])])
   const omittedMethods = new Set(options.omitMethods)
   const seenMethods = new Set<string>()
@@ -81,7 +79,6 @@ export function describeSdk(options: SdkDocumentationOptions): SdkDocumentation 
   const description = (symbol: ts.Symbol | undefined) => symbol ? ts.displayPartsToString(symbol.getDocumentationComment(checker)) : ''
   const safeName = (hint: string) => hint.replace(/[^a-z0-9]/gi, ' ').split(' ').filter(Boolean).map(word => word[0].toUpperCase() + word.slice(1)).join('')
   const objectFlags = (type: ts.Type) => type.flags & ts.TypeFlags.Object ? (type as ts.ObjectType).objectFlags : 0
-  const isEnum = (type: ts.Type) => !!((type.getSymbol()?.flags ?? 0) & ts.SymbolFlags.Enum)
 
   function render(type: ts.Type, hint: string): string {
     // Optional enum fields flatten into member literals, which print as module
@@ -138,10 +135,10 @@ export function describeSdk(options: SdkDocumentationOptions): SdkDocumentation 
   }
 
   const entries: SdkEntry[] = []
-  function walk(type: ts.Type, path: string, depth = 0): void {
+  function walk(properties: ts.Symbol[], path: string, depth = 0): void {
     if (depth > 4)
       throw new Error(`SDK docs nesting is too deep: ${path}`)
-    for (const prop of checker.getPropertiesOfType(type)) {
+    for (const prop of properties) {
       const current = `${path}.${prop.name}`
       const declaration = prop.valueDeclaration ?? context
       const value = checker.getTypeOfSymbolAtLocation(prop, declaration)
@@ -152,14 +149,14 @@ export function describeSdk(options: SdkDocumentationOptions): SdkDocumentation 
         if (omittedMethods.has(current))
           continue
         const text = `${current}${signature(call, current)}`
-        // Helpers re-exported through an object literal carry JSDoc on the function, not the property.
+        // Re-exported helpers can carry JSDoc on the function rather than the export symbol.
         const doc = description(prop) || ts.displayPartsToString(call.getDocumentationComment(checker))
         const tags = [...prop.getJsDocTags(checker), ...call.getJsDocTags()]
-        // Examples name the client `runner`, as the SDK README does. Show the host's name for it.
-        const examples = [...new Set(tags.filter(tag => tag.name === 'example').map(tag => ts.displayPartsToString(tag.text).trim().replace(/(?<![.\w])runner\b/g, options.runner)))]
+        // Preserve source examples; the host supplies any environment-specific bindings.
+        const examples = [...new Set(tags.filter(tag => tag.name === 'example').map(tag => ts.displayPartsToString(tag.text).trim()))]
         entries.push({ description: doc, examples, path: current, relatedTypes: [...refs], signature: text })
       }
-      else if (isEnum(value)) {
+      else if ((value.getSymbol()?.flags ?? 0) & ts.SymbolFlags.Enum) {
         // Enum objects expose numeric reverse mappings at runtime. Document
         // their source enum instead of advertising those mappings as methods.
         const text = render(value, prop.name)
@@ -168,23 +165,25 @@ export function describeSdk(options: SdkDocumentationOptions): SdkDocumentation 
       else if (objectFlags(value) & ts.ObjectFlags.Anonymous) {
         // Namespace objects such as `runner.windows`. Resource data such as
         // `WindowClient.id` stays in the type definition only.
-        walk(value, current, depth + 1)
+        walk(checker.getPropertiesOfType(value), current, depth + 1)
       }
     }
   }
 
   for (const node of context.statements) {
     if (ts.isInterfaceDeclaration(node) && ['RunnerClient', 'WindowClient'].includes(node.name.text))
-      walk(checker.getTypeAtLocation(node), node.name.text === 'RunnerClient' ? options.runner : 'WindowClient')
+      walk(checker.getPropertiesOfType(checker.getTypeAtLocation(node)), node.name.text === 'RunnerClient' ? options.runner : 'WindowClient')
     if (ts.isTypeAliasDeclaration(node) && node.name.text === 'CaptureTarget')
       render(checker.getTypeAtLocation(node), 'CaptureTarget')
   }
   if (options.helpers) {
-    const { file, name, path } = options.helpers
-    const declaration = program.getSourceFile(file)?.statements.filter(ts.isVariableStatement).flatMap(node => node.declarationList.declarations).find(item => item.name.getText() === name)
-    if (!declaration)
-      throw new Error(`Cannot find SDK helpers ${name} in ${file}`)
-    walk(checker.getTypeAtLocation(declaration), path)
+    const exports = checker.getExportsOfModule(checker.getSymbolAtLocation(program.getSourceFile(indexPath)!)!)
+    walk(options.helpers.map((name) => {
+      const symbol = exports.find(item => item.name === name)
+      if (!symbol)
+        throw new Error(`Cannot find SDK export: ${name}`)
+      return symbol
+    }), 'sdk')
   }
   const unknownMethods = [...omittedMethods].filter(path => !seenMethods.has(path))
   if (unknownMethods.length)

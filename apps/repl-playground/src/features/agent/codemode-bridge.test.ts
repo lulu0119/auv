@@ -70,6 +70,7 @@ describe('playground execute MCP tool', () => {
     const client = await connectTools(host)
     const { tools } = await client.listTools()
     expect(tools.map(tool => tool.name)).toEqual(['execute'])
+    expect(tools[0].inputSchema.properties?.timeoutMs).toMatchObject({ default: 30000, maximum: 120000 })
     expect((await client.callTool({ arguments: { code: 'return 1' }, name: 'execute' })).isError).toBe(true)
     host.setSession('one')
     execution.run.mockResolvedValueOnce({ codemode: { content: [{ text: 'result', type: 'text' }], store: {} }, status: 'ok' })

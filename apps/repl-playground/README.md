@@ -345,15 +345,17 @@ argument and return types, source documentation, and examples for common tasks.
 `WindowClient` names the object returned by `auv.windows.resolve/get/list/from`.
 It is not a global constructor. Help queries do not call the device.
 
-At build time, the SDK's `scripts/documentation.ts` (`@auv-js/sdk/documentation`,
-a workspace-only export) reads the SDK contract with the TypeScript compiler and
-expands its helper aliases into concrete definitions. It also reads the `@example`
-tags in the SDK JSDoc, which name the client `runner` as the SDK README does;
-help shows them as `auv`. `agent/help-catalog.ts` adds this VM's policy: the
-`auv` global name, omitted methods and callback fields, and the
-`text`/`image`/`store`/`load` globals with their examples. It also owns the Vite
-snapshot and source invalidation. The compiler runs outside the
-browser and VM; only the resulting JSON enters those environments.
+The workspace-only `@auv-js/sdk/documentation` export reads SDK source with TypeScript at build time.
+It expands helper aliases and reads JSDoc `@example` tags.
+Playground adds `const runner = auv` before each example and preserves its source.
+
+`agent/help-catalog.ts` defines the VM global name, omitted methods and callback fields, and documentation for `text`/`image`/`store`/`load`.
+Playground uses `codeModeExports` to select both VM helpers and their documentation.
+The generator reads their types from SDK public exports.
+The Vite plugin caches one JSON snapshot and invalidates it when SDK sources change.
+
+The compiler runs outside the browser and VM. Only the resulting JSON enters those environments.
+The MCP tool, VM, and help read execution limits from `src/runtime/codemode-limits.ts`.
 
 SDK callbacks, stream controllers, and async iterators cannot cross the VM
 boundary. Local callbacks such as `Array.map` work. Help omits unsupported

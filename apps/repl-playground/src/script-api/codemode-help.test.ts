@@ -38,10 +38,12 @@ describe('agent SDK help', () => {
   it('exposes admitted SDK constants and excludes connection APIs', () => {
     expect(api.search({ namespace: 'sdk.Position' }).items.map(item => item.path)).toEqual(['sdk.Position.display', 'sdk.Position.screen', 'sdk.Position.window'])
     expect(api.describe({ path: 'sdk.InputPolicy' })).toMatchObject({ found: true })
-    // Helpers re-exported through `codeModeSdk` keep their function JSDoc.
+    // Selected SDK exports keep their function JSDoc.
     expect(api.describe({ path: 'sdk.region' })).toMatchObject({ description: expect.stringMatching(/\S/) })
     expect(JSON.stringify(api.describe({ path: 'sdk.InputPolicy' }))).toContain('BACKGROUND_ONLY')
     expect(api.search({ query: 'connect' }).items.map(item => item.path)).not.toContain('sdk.connect')
+    const helperNames = catalog.entries.filter(entry => entry.path.startsWith('sdk.')).map(entry => entry.path.split('.')[1])
+    expect([...new Set(helperNames)].sort()).toEqual(Object.keys(codeModeSdk).sort())
     expect(() => api.search({ limit: 11 })).toThrow('limit from 1 to 10')
     expect(() => api.search({ offset: -1 })).toThrow('nonnegative offset')
   })
@@ -95,10 +97,9 @@ describe('agent SDK help', () => {
     const help = api.describe({ path: 'text' })
     expect(help).toMatchObject({ description: expect.stringContaining('functions') })
     // The `text` global owns the output example; SDK examples do not call VM globals.
-    const list = api.describe({ path: 'text' })
-    if (!('examples' in list))
+    if (!('examples' in help))
       throw new Error('Missing text example')
-    const example = list.examples[1]
+    const example = help.examples[1]
     expect(api.help().rules.join(' ')).toContain('Array.map')
     const outcome = await runCodeMode({ ...compileCell(example, { allowReturn: true }), breakpoints: [], codemode: { store: {}, timeoutMs: 2000 }, executionId: 1, mode: 'run' }, {
       __bind: () => {},

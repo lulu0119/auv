@@ -99,9 +99,26 @@ describe('isolated codemode', () => {
   })
 
   it('rejects oversized text and preserves earlier output', async () => {
-    const outcome = await runCodeMode(request('text("small"); text("x".repeat(16001));'), hooks, new AbortController().signal)
+    const outcome = await runCodeMode(request('text("small"); text("x".repeat(api.help().limits.maxTextCharacters));'), hooks, new AbortController().signal)
     expect(outcome.status).toBe('error')
     expect(outcome.codemode?.content).toEqual([{ text: 'small', type: 'text' }])
+  })
+
+  it('accepts the text limit advertised by help', async () => {
+    const outcome = await runCodeMode(request('text("x".repeat(api.help().limits.maxTextCharacters));'), hooks, new AbortController().signal)
+    expect(outcome.status).toBe('ok')
+    expect(outcome.codemode?.content).toEqual([{ text: 'x'.repeat(16000), type: 'text' }])
+  })
+
+  it('accepts the advertised store limit and rejects one more character without replacing state', async () => {
+    const outcome = await runCodeMode(request(`
+      const size = api.help().limits.maxStoreCharacters - JSON.stringify({ value: "" }).length;
+      store("value", "x".repeat(size));
+      try { store("value", "x".repeat(size + 1)); } catch (error) { text(error.message); }
+    `), hooks, new AbortController().signal)
+    expect(outcome.status).toBe('ok')
+    expect(JSON.stringify(outcome.codemode?.store)).toHaveLength(64000)
+    expect(outcome.codemode?.content).toEqual([{ text: 'Codemode store exceeds 64000 characters', type: 'text' }])
   })
 
   it('interrupts synchronous loops at the deadline', async () => {

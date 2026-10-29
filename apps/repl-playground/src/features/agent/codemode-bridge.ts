@@ -7,6 +7,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import { version } from '../../../package.json'
+import { codeModeLimits } from '../../runtime/codemode-limits'
 import { session } from '../../runtime/session'
 
 const tool = {
@@ -23,7 +24,7 @@ const tool = {
     additionalProperties: false,
     properties: {
       code: { description: 'Raw TypeScript, with top-level await and return.', maxLength: 100000, minLength: 1, type: 'string' },
-      timeoutMs: { default: 30000, maximum: 120000, minimum: 1, type: 'integer' },
+      timeoutMs: { default: codeModeLimits.defaultTimeoutMs, maximum: codeModeLimits.maxTimeoutMs, minimum: 1, type: 'integer' },
     },
     required: ['code'],
     type: 'object',
@@ -72,10 +73,10 @@ export class CodeModeHost {
     if (this.#active || session.running)
       return error('Another playground execution is running.')
     const code = params?.code
-    const timeoutMs = params?.timeoutMs ?? 30000
+    const timeoutMs = params?.timeoutMs ?? codeModeLimits.defaultTimeoutMs
     if (typeof code !== 'string' || !code.trim() || code.length > 100000
-      || typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) {
-      return error('execute requires code and a timeoutMs from 1 to 120000.')
+      || typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > codeModeLimits.maxTimeoutMs) {
+      return error(`execute requires code and a timeoutMs from 1 to ${codeModeLimits.maxTimeoutMs}.`)
     }
     const active = new AbortController()
     this.#active = active

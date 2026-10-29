@@ -8,6 +8,7 @@ import catalog from 'virtual:auv-codemode-help'
 
 import { newQuickJSWASMModuleFromVariant } from 'quickjs-emscripten-core'
 
+import { codeModeLimits } from '../runtime/codemode-limits'
 import { createApiHelp } from '../script-api/codemode-help'
 import { toWire } from './wire-value'
 
@@ -25,7 +26,7 @@ const quickJS = newQuickJSWASMModuleFromVariant(variant)
 export async function runCodeMode(request: RunRequest, globals: Record<string, unknown>, signal: AbortSignal, onOutput: (item: NonNullable<RunOutcome['codemode']>['content'][number]) => void = () => {}): Promise<RunOutcome> {
   const vm = (await quickJS).newContext()
   const deadline = Date.now() + request.codemode!.timeoutMs
-  vm.runtime.setMemoryLimit(64 * 1024 * 1024)
+  vm.runtime.setMemoryLimit(codeModeLimits.memoryMiB * 1024 * 1024)
   vm.runtime.setMaxStackSize(512 * 1024)
   vm.runtime.setInterruptHandler(() => signal.aborted || Date.now() >= deadline)
   const content: NonNullable<RunOutcome['codemode']>['content'] = []
@@ -160,8 +161,8 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
   }
   const text = (value: unknown) => {
     const output = typeof value === 'string' ? value : JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? String(item) : item) ?? 'undefined'
-    if (content.length >= 100 || outputChars + output.length > 16000)
-      throw new Error('Codemode output exceeds 16000 characters or 100 items; filter results before output')
+    if (content.length >= 100 || outputChars + output.length > codeModeLimits.maxTextCharacters)
+      throw new Error(`Codemode output exceeds ${codeModeLimits.maxTextCharacters} characters or 100 items; filter results before output`)
     outputChars += output.length
     const item = { text: output, type: 'text' as const }
     content.push(item)
@@ -189,8 +190,8 @@ export async function runCodeMode(request: RunRequest, globals: Record<string, u
       if (value === undefined)
         delete next[key]
       else Object.defineProperty(next, key, { configurable: true, enumerable: true, value: structuredClone(value), writable: true })
-      if (JSON.stringify(next).length > 64000)
-        throw new Error('Codemode store exceeds 64000 characters')
+      if (JSON.stringify(next).length > codeModeLimits.maxStoreCharacters)
+        throw new Error(`Codemode store exceeds ${codeModeLimits.maxStoreCharacters} characters`)
       store = next
     }, false)
     install('load', (key: string) => Object.hasOwn(store, key) ? structuredClone(store[key]) : undefined, false)

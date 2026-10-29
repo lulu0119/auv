@@ -1,12 +1,14 @@
 import type { SdkDocumentation, SdkEntry, SdkType } from '@auv-js/sdk/documentation'
 
+import { codeModeLimits } from '../runtime/codemode-limits'
+
 export const codeModeRules = [
   'Call execute sequentially, including help queries. Wait for each tool result before starting the next call. Calls share one mutable desktop.',
   'Help describes the SDK contract, not verified support on every device. Platform calls can return UNIMPLEMENTED.',
   'Arguments must be data; SDK bigint IDs retain precision. Callbacks, AbortSignal, generators, and async iterators cannot cross the VM. The host cancels the whole execution.',
   'Local callbacks such as Array.map work inside the VM. Output and stored values must contain data, not functions. For WindowClient output, select its id or window metadata instead of the whole client.',
   'A plain { x, y } is window-local on WindowClient and screen space on auv.input. A text match clicks at the center of its screen bounds.',
-  'Captures contain references. Use await image(capture) for PNG/JPEG output, bounded to 1024 by 1024. Do not fetch or store full pixels.',
+  `Captures contain references. Use await image(capture) for PNG/JPEG output, bounded to ${codeModeLimits.maxImageDimension} by ${codeModeLimits.maxImageDimension}. Do not fetch or store full pixels.`,
   'Each call has fresh variables. store/load retains small JSON values only after success. Save window IDs and rebind with auv.windows.from(id).',
   'Await device calls. Failed or canceled scripts do not undo delivered input. Successful execution does not prove the requested application state.',
 ]
@@ -45,7 +47,7 @@ export function createApiHelp(catalog: SdkDocumentation) {
       if (!definition)
         continue
       const cost = name.length + JSON.stringify(definition).length
-      // Leave room for JSON framing within codemode's 16,000-character output.
+      // Leave room for JSON framing within codemode's text output limit.
       if (size + cost > 12000) {
         omittedTypes.push(name)
       }
@@ -65,7 +67,7 @@ export function createApiHelp(catalog: SdkDocumentation) {
         'WindowClient is returned by auv.windows.resolve/get/list/from. Call its methods on that object, not on a global WindowClient.',
       ],
       examples: ['text(api.search({ query: "window text" }))', 'text(api.describe({ path: "WindowClient.findText" }))', 'text((await auv.windows.list()).map(win => ({ id: win.id, window: win.window })))'],
-      limits: { defaultTimeoutMs: 30000, maxImageDimension: 1024, maxStoreCharacters: 64000, maxTextCharacters: 16000, maxTimeoutMs: 120000, memoryMiB: 64 },
+      limits: { ...codeModeLimits },
       namespaces: [...new Set(entries.map(entry => entry.path.split('.')[0]))],
       rules: codeModeRules,
       starter: ['auv.windows.list', 'auv.windows.resolve', 'WindowClient.findText', 'WindowClient.click', 'WindowClient.capture', 'image'].flatMap((path) => {
