@@ -486,14 +486,22 @@ These are known and intentionally deferred; each is marked in code.
 ```sh
 pnpm -F @auv-js/repl-playground lint      # oxlint + eslint via moeru-lint
 pnpm -F @auv-js/repl-playground typecheck
-pnpm -F @auv-js/repl-playground test:run  # stepper, area, camera, replay, resource and store tests
+pnpm -F @auv-js/repl-playground test:run  # Node unit tests and browser tests
+pnpm -F @auv-js/repl-playground test:unit # Node unit tests only
 pnpm -F @auv-js/repl-playground build
-pnpm -F @auv-js/repl-playground test:browser # real MCP + ACP bridge + browser mock Runner
+pnpm -F @auv-js/repl-playground test:browser # component tests and MCP/ACP integration
 ```
 
-The browser test requires an installed Playwright browser. On Windows it uses
-Edge by default. Set `PLAYWRIGHT_CHANNEL` to select another installed channel.
+Vitest Browser Mode runs the browser tests with the Playwright provider.
+Component tests next to the Agent UI cover Markdown, clipboard access, tool results,
+and image previews with an in-memory ACP peer. The `agent/` integration tests
+cover real Workers, QuickJS, HTTP MCP, and connection lifecycle.
+The browser tests require an installed Playwright browser. Run
+`pnpm exec playwright install chromium` to install Chromium. On Windows local
+runs use Edge by default; CI uses Playwright Chromium on every platform.
+Set `PLAYWRIGHT_CHANNEL` to select another installed channel.
 
 The root `pnpm lint`, `pnpm typecheck` and `pnpm test:run` include this package.
+The CI test step runs both the Node and browser projects through `test:run`.
 The root ESLint config ignores `devtools/**`, so this package keeps its own
 config (React and UnoCSS rules).

@@ -12,7 +12,8 @@ export async function createMcpRelay() {
   let url
   const server = createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Origin', '*')
-    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, MCP-Session-Id, MCP-Protocol-Version, Last-Event-ID')
+    response.setHeader('Access-Control-Expose-Headers', 'MCP-Session-Id')
     response.setHeader('Access-Control-Allow-Methods', 'POST, GET, DELETE, OPTIONS')
     if (request.method === 'OPTIONS') {
       response.writeHead(204).end()

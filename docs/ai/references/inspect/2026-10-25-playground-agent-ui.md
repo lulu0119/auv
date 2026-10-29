@@ -47,10 +47,12 @@ Global `styles.css` contains no Agent-specific rules.
 
 ## Evidence
 
-Evidence level: automated browser integration with synthetic ACP responses and Mock Runner.
-The [browser harness](../../../../apps/repl-playground/agent/verify-browser.mjs) checks grouped tool calls, nested failures, harmless error-related text, readable scripts, and unchanged protocol status.
-It also checks screenshot decoding, dialog dismissal, connection retention, session changes, and the workbench at 1280 by 720.
-Markdown checks cover tables, task lists, strikethrough, links, quotes, and fenced-code copies.
+Evidence level: automated browser component tests with in-memory ACP updates, plus workbench integration with synthetic network peers and Mock Runner.
+The [activity component tests](../../../../apps/repl-playground/src/features/agent/AgentActivity.browser.test.tsx) check grouped tool calls, nested failures, harmless error-related text, readable scripts, and unchanged protocol status.
+They also check screenshot decoding and dialog dismissal.
+The [Markdown component tests](../../../../apps/repl-playground/src/features/agent/MarkdownText.browser.test.tsx) cover tables, task lists, strikethrough, links, quotes, and fenced-code copies.
+The [connection integration test](../../../../apps/repl-playground/agent/connection.browser.test.tsx) checks connection retention, session changes, and the workbench at 1280 by 720.
+The [presentation unit tests](../../../../apps/repl-playground/src/features/agent/tool-presentation.test.ts) check structured error metadata without a browser.
 The execution contract records the shared validation commands and results.
 
 The fixture shows grouped calls, deliberate errors, a screenshot preview, and a Markdown report:

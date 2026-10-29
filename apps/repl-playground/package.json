@@ -11,7 +11,8 @@
     "lint": "moeru-lint .",
     "lint:fix": "moeru-lint --fix .",
     "test:run": "vitest run",
-    "test:browser": "node agent/verify-browser.mjs",
+    "test:unit": "vitest run --project node",
+    "test:browser": "vitest run --project browser",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -58,6 +59,7 @@
     "@types/react-dom": "catalog:",
     "@unocss/eslint-plugin": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
     "eslint": "catalog:",
     "eslint-plugin-oxlint": "catalog:",
     "eslint-plugin-react-refresh": "catalog:",

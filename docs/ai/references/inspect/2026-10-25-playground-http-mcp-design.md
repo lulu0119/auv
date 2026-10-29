@@ -157,7 +157,10 @@ It is not a passing performance guarantee.
 ## Evidence
 
 Evidence level: automated browser integration with QuickJS, the actual SDK, Mock Runner, synthetic Exterior/ACP peers, and real MCP HTTP transports.
-The [browser harness](../../../../apps/repl-playground/agent/verify-browser.mjs) checks:
+The Vitest browser tests cover [execution](../../../../apps/repl-playground/agent/execution.browser.test.tsx) and [connections](../../../../apps/repl-playground/agent/connection.browser.test.tsx).
+They use the Playwright provider and synthetic network peers.
+Co-located browser component tests cover Markdown, clipboard access, tool errors, and image dialogs with an in-memory ACP peer.
+The tests check:
 
 - Tool discovery before session creation and execution without a device for pure code and SDK help.
 - Returned help examples against the actual SDK, display selection, large arrays, and bounded image output.
@@ -171,7 +174,13 @@ State tests inspect the next invocation's input store.
 VM tests run the compiler and QuickJS with supplied host functions to check marshalling and execution rules.
 Mock tests check capture errors, keyboard validation before effects, and empty text queries.
 
-Validation passed: 108 Playground tests, Playground typecheck, changed-file ESLint, the browser harness, and 21 SDK capture regressions.
+Validation on 2026-10-29 passed: 110 Node tests and six browser tests through the default `test:run` command.
+The browser project also passed with `CI=true` using Playwright Chromium on Windows.
+Playground typecheck, changed-file ESLint, production build, and `git diff --check` also passed during the browser-test migration.
+Full Playground lint still reports six pre-existing sorting errors in `src/store.ts`, which this migration does not change.
+Combined runs complete the Node project before browser compilation.
+The root test command and CI include both projects. Use `test:unit` or `test:browser` to run one project.
+Earlier SDK capture validation passed 21 regressions.
 Run the checks from the repository root:
 
 ```sh
