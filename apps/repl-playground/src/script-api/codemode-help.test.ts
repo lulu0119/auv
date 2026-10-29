@@ -19,12 +19,12 @@ describe('agent SDK help', () => {
     const found = api.search({ query: 'WindowClient.findText' })
     expect(found.items[0]).toMatchObject({ path: 'WindowClient.findText', signature: expect.stringContaining('query: string') })
     expect(api.search({ query: 'scrollStream' }).items.map(item => item.path)).not.toContain('WindowClient.scrollStream')
-    expect(api.describe({ path: 'WindowClient.scrollStream' })).toMatchObject({ found: true, unavailable: expect.stringContaining('async iterator') })
+    expect(api.describe({ path: 'WindowClient.scrollStream' })).toMatchObject({ found: false })
   })
 
   it('describes SDK arguments and output fields rather than raw RPC call arguments', () => {
     const entry = api.describe({ path: 'WindowClient.findText' })
-    expect(entry).toMatchObject({ examples: [expect.stringContaining('win.findText("Increment")')], found: true, signature: expect.stringContaining('Promise<FindWindowTextResponse>') })
+    expect(entry).toMatchObject({ examples: [expect.stringContaining('win.findText(')], found: true, signature: expect.stringContaining('Promise<FindWindowTextResponse>') })
     expect(JSON.stringify(entry)).toContain('matches')
     expect(JSON.stringify(entry)).not.toContain('AbortSignal')
     expect(catalog.types.FindWindowTextOptions.definition).not.toContain('window:')
@@ -38,10 +38,26 @@ describe('agent SDK help', () => {
   it('exposes admitted SDK constants and excludes connection APIs', () => {
     expect(api.search({ namespace: 'sdk.Position' }).items.map(item => item.path)).toEqual(['sdk.Position.display', 'sdk.Position.screen', 'sdk.Position.window'])
     expect(api.describe({ path: 'sdk.InputPolicy' })).toMatchObject({ found: true })
+    // Helpers re-exported through `codeModeSdk` keep their function JSDoc.
+    expect(api.describe({ path: 'sdk.region' })).toMatchObject({ description: expect.stringMatching(/\S/) })
     expect(JSON.stringify(api.describe({ path: 'sdk.InputPolicy' }))).toContain('BACKGROUND_ONLY')
     expect(api.search({ query: 'connect' }).items.map(item => item.path)).not.toContain('sdk.connect')
     expect(() => api.search({ limit: 11 })).toThrow('limit from 1 to 10')
     expect(() => api.search({ offset: -1 })).toThrow('nonnegative offset')
+  })
+
+  // SDK docs own alias expansion. The VM catalog removes what cannot cross the VM.
+  it('omits callback and AbortSignal fields from VM type definitions', () => {
+    const definitions = Object.values(catalog.types).map(type => type.definition).join('\n')
+    expect(catalog.types.ScrollUntilOptions.definition).toContain('maxSteps?: undefined | number')
+    expect(definitions).not.toMatch(/\b(?:onUpdate|signal|until)\??:/)
+    expect(definitions).not.toMatch(/\bAbortSignal\b/)
+  })
+
+  // The omitted-method list is data. This catches a new stream or generator method that it misses.
+  it('advertises no stream or generator type that cannot cross the VM', () => {
+    const text = JSON.stringify([...catalog.entries.map(entry => entry.signature), ...Object.values(catalog.types).map(type => type.definition)])
+    expect(text).not.toMatch(/\b(?:AsyncIterable|AsyncGenerator|TypedDuplexCall|ScrollStreamController)\b/)
   })
 
   // ROOT CAUSE: enum member types were printed as imports with no numeric
@@ -78,10 +94,11 @@ describe('agent SDK help', () => {
   it('shows how to output WindowClient data while keeping local callbacks inside the VM', async () => {
     const help = api.describe({ path: 'text' })
     expect(help).toMatchObject({ description: expect.stringContaining('functions') })
-    const list = api.describe({ path: 'auv.windows.list' })
+    // The `text` global owns the output example; SDK examples do not call VM globals.
+    const list = api.describe({ path: 'text' })
     if (!('examples' in list))
-      throw new Error('Missing window-list example')
-    const example = list.examples[0]
+      throw new Error('Missing text example')
+    const example = list.examples[1]
     expect(api.help().rules.join(' ')).toContain('Array.map')
     const outcome = await runCodeMode({ ...compileCell(example, { allowReturn: true }), breakpoints: [], codemode: { store: {}, timeoutMs: 2000 }, executionId: 1, mode: 'run' }, {
       __bind: () => {},

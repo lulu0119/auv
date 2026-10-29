@@ -1,4 +1,4 @@
 declare module 'virtual:auv-codemode-help' {
-  const catalog: import('./script-api/codemode-help').ApiCatalog
+  const catalog: import('@auv-js/sdk/documentation').SdkDocumentation
   export default catalog
 }

@@ -68,7 +68,8 @@ it('executes HTTP MCP calls in real workers and preserves history, cancellation 
     const display = await execute('const selector = { selector: { case: "display", value: { displayId: "2" } } }; text((await auv.displays.capture(selector)).display.displayId); text((await auv.displays.findText(selector, "Counter")).matches.length);')
     expect(display.isError).toBe(false)
     expect(textItems(display)).toEqual(expect.arrayContaining(['2', '1']))
-    const example = await execute(help.examples[0])
+    // SDK examples do not call VM globals; the test adds the output that an agent would write.
+    const example = await execute(`${help.examples[0]}\ntext(matches)`)
     expect(example.isError).toBe(false)
     expect(textItems(example).join('\n')).toContain('Increment')
     const result = await execute(`

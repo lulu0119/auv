@@ -1,23 +1,4 @@
-export interface ApiCatalog {
-  entries: ApiEntry[]
-  types: Record<string, ApiType>
-}
-
-/** JSON help for the actual SDK call surface, generated outside the browser. */
-export interface ApiEntry {
-  description: string
-  examples: string[]
-  path: string
-  relatedTypes: string[]
-  signature: string
-  unavailable?: string
-}
-
-export interface ApiType {
-  definition: string
-  description: string
-  relatedTypes: string[]
-}
+import type { SdkDocumentation, SdkEntry, SdkType } from '@auv-js/sdk/documentation'
 
 export const codeModeRules = [
   'Call execute sequentially, including help queries. Wait for each tool result before starting the next call. Calls share one mutable desktop.',
@@ -30,10 +11,10 @@ export const codeModeRules = [
   'Await device calls. Failed or canceled scripts do not undo delivered input. Successful execution does not prove the requested application state.',
 ]
 
-/** Search and describe only JSON metadata; neither method executes an SDK call. */
-export function createApiHelp(catalog: ApiCatalog) {
+/** Search and describe SDK JSON metadata generated outside the browser; neither method executes a call. */
+export function createApiHelp(catalog: SdkDocumentation) {
   const entries = [...catalog.entries].sort((a, b) => a.path.localeCompare(b.path))
-  const summary = (entry: ApiEntry) => ({ description: entry.description, path: entry.path, signature: entry.signature, ...(entry.unavailable ? { unavailable: entry.unavailable } : {}) })
+  const summary = (entry: SdkEntry) => ({ description: entry.description, path: entry.path, signature: entry.signature })
 
   function search({ limit = 5, namespace, offset = 0, query = '' }: { limit?: number, namespace?: string, offset?: number, query?: string } = {}) {
     if (typeof query !== 'string' || (namespace !== undefined && typeof namespace !== 'string'))
@@ -41,7 +22,7 @@ export function createApiHelp(catalog: ApiCatalog) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 10 || !Number.isInteger(offset) || offset < 0)
       throw new RangeError('api.search requires limit from 1 to 10 and a nonnegative offset')
     const terms = query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
-    const matches = entries.filter(entry => !entry.unavailable && (!namespace || entry.path === namespace || entry.path.startsWith(`${namespace}.`)))
+    const matches = entries.filter(entry => (!namespace || entry.path === namespace || entry.path.startsWith(`${namespace}.`)))
       .map(entry => ({ entry, score: terms.reduce((score, term) => score + (entry.path.toLowerCase().includes(term) ? 4 : 0) + (entry.description.toLowerCase().includes(term) ? 1 : 0), 0) }))
       .filter(item => terms.length === 0 || item.score > 0)
       .sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path))
@@ -56,7 +37,7 @@ export function createApiHelp(catalog: ApiCatalog) {
     if (!match)
       return { found: false, message: `Unknown API or type: ${path}. Use api.search({ query: ... }) for exact paths.`, path }
     const result = { ...match, found: true, path }
-    const types: Record<string, ApiType> = {}
+    const types: Record<string, SdkType> = {}
     const omittedTypes: string[] = []
     let size = JSON.stringify(result).length
     for (const name of result.relatedTypes) {
@@ -85,7 +66,7 @@ export function createApiHelp(catalog: ApiCatalog) {
       ],
       examples: ['text(api.search({ query: "window text" }))', 'text(api.describe({ path: "WindowClient.findText" }))', 'text((await auv.windows.list()).map(win => ({ id: win.id, window: win.window })))'],
       limits: { defaultTimeoutMs: 30000, maxImageDimension: 1024, maxStoreCharacters: 64000, maxTextCharacters: 16000, maxTimeoutMs: 120000, memoryMiB: 64 },
-      namespaces: [...new Set(entries.filter(entry => !entry.unavailable).map(entry => entry.path.split('.')[0]))],
+      namespaces: [...new Set(entries.map(entry => entry.path.split('.')[0]))],
       rules: codeModeRules,
       starter: ['auv.windows.list', 'auv.windows.resolve', 'WindowClient.findText', 'WindowClient.click', 'WindowClient.capture', 'image'].flatMap((path) => {
         const entry = entries.find(entry => entry.path === path)
