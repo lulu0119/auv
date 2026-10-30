@@ -565,6 +565,10 @@ impl WindowApi<'_> {
         id: window_id(recipient.xid),
       }),
       verification,
+      // TODO(x11-activation-window-observation): the EWMH client list could
+      // report Present/Absent as Windows does (#324). Deferred: this branch only
+      // carries #361 onto main for the MCP exposure benchmark.
+      window_observation: None,
     })
   }
 
