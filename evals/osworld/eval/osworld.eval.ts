@@ -8,7 +8,7 @@ import { emitChatModelErrorTelemetry, emitChatModelRequestTelemetry, emitChatMod
 import { modelApiFrom } from '../src/agent'
 import { harnessFrom } from '../src/agents'
 import { loadCases } from '../src/cases'
-import { runEpisode } from '../src/episode'
+import { runEpisode, toolExposureFrom } from '../src/episode'
 import { terminalUseOf } from '../src/terminalUse'
 
 // Wall-clock budget for one episode: Pod boot, setup, every agent step, and
@@ -25,6 +25,7 @@ describeTask('osworld', () => {
       const { apiKey = '', baseURL = 'https://api.openai.com/v1', model } = openaiFromRunContext(modelFromRun(context, { axis: 'model' }))
       const repeat = Number(context.task.matrix.run.repeat ?? 1)
       const harness = harnessFrom(context.task.matrix.run.harness ?? 'pi')
+      const exposure = toolExposureFrom(context.task.matrix.run.exposure ?? 'compact')
       context.recordMetric('osworld.domain', item.domain)
       context.recordMetric('osworld.task.file', item.file)
       context.recordMetric('osworld.evaluator.func', JSON.stringify(item.task.evaluator.func))
@@ -33,6 +34,7 @@ describeTask('osworld', () => {
       context.recordMetric('osworld.model.api', api)
       context.recordMetric('osworld.repeat', repeat)
       context.recordMetric('osworld.harness', harness)
+      context.recordMetric('osworld.auv.tool_exposure', exposure)
 
       // Each model request becomes `inference.*` events with its usage and
       // latency, which the Vieval viewer shows on the case's Inference tab.
@@ -46,7 +48,7 @@ describeTask('osworld', () => {
           response: { toolCalls: reply.calls.map(call => ({ arguments: call.arguments, id: call.callId, name: call.name })), usage: reply.usage },
         }),
       }
-      const result = await runEpisode(item, { api, apiKey, baseURL, model }, { harness, repeat, signal: context.signal, telemetry })
+      const result = await runEpisode(item, { api, apiKey, baseURL, model }, { exposure, harness, repeat, signal: context.signal, telemetry })
       context.recordMetric('osworld.pod', result.podName)
       context.recordMetric('osworld.evidence', result.evidenceDirectory)
       context.recordMetric('osworld.agent.steps', result.agent.steps.length)
@@ -65,7 +67,7 @@ describeTask('osworld', () => {
       }
       context.recordMetric('auv.run.ids', result.agent.runIds)
       context.recordMetric('auv.linux_binary.sha256', result.auvLinuxSha256)
-      context.recordScore(result.score, 'exact')
+      context.recordScore('exact', result.score)
       expect(result.score).toBe(1)
     }, { input: item, timeout: caseTimeoutMs })
   }

@@ -19,14 +19,16 @@ const models = (process.env.OSWORLD_MODEL ?? 'gpt-5.5').split(',').map(model => 
 // the list is parsed here instead of with `harnessesFrom`.
 const harnesses = (process.env.OSWORLD_HARNESS || 'pi').split(',').map(name => name.trim()).filter(Boolean)
 
+// AUV MCP tool exposures to compare, comma-separated (`compact`, `typed`); each
+// becomes one run-matrix row. `src/episode.ts` maps a value to the host
+// binary and `auv mcp serve` flags.
+const exposures = (process.env.OSWORLD_AUV_TOOL_EXPOSURE || 'compact').split(',').map(name => name.trim()).filter(Boolean)
+
 // Independent repetitions of every (case, model) pair. Each repetition is a
 // separate run-matrix row, so it gets its own fresh Pod and its own score.
 const repeat = Array.from({ length: Math.max(1, Number(process.env.OSWORLD_REPEAT ?? 1)) }, (_, index) => index + 1)
 
 export default defineConfig({
-  concurrency: {
-    workspace: 1,
-  },
   plugins: [
     ChatModels({
       models: models.map(model => chatModelFrom({
@@ -42,17 +44,25 @@ export default defineConfig({
   ],
   projects: [
     {
-      concurrency: {
-        case: parallel,
-        project: 1,
-        task: parallel,
-      },
       include: ['eval/*.eval.ts'],
       name: 'osworld-kubernetes',
       root: '.',
       runMatrix: {
-        extend: { harness: harnesses, model: models, repeat },
+        extend: { exposure: exposures, harness: harnesses, model: models, repeat },
+      },
+      scheduler: {
+        concurrency: {
+          case: parallel,
+          task: parallel,
+        },
       },
     },
   ],
+  scheduler: {
+    concurrency: {
+      case: parallel,
+      project: 1,
+      task: parallel,
+    },
+  },
 })

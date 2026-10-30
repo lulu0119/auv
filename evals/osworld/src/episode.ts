@@ -5,7 +5,7 @@ import type { OsworldCase } from './cases'
 import process from 'node:process'
 
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 
@@ -67,6 +67,14 @@ const guestAuvPort = 9847
 // screen). OSWORLD_EVALUATION_SETTLE_SECONDS overrides it.
 const evaluationSettleMs = Number(process.env.OSWORLD_EVALUATION_SETTLE_SECONDS ?? 20) * 1000
 
+/**
+ * The AUV MCP tool exposure under test, a run-matrix axis
+ * (`OSWORLD_AUV_TOOL_EXPOSURE`): `compact` serves the `invoke` tool from
+ * `OSWORLD_AUV_MACOS_BINARY`; `typed` serves one tool per command from
+ * `OSWORLD_AUV_MACOS_BINARY_TYPED` with `--tool-exposure typed`.
+ */
+export type ToolExposure = 'compact' | 'typed'
+
 /** A host file uploaded to one guest path and verified there by SHA-256. */
 interface GuestFile {
   bytes: Uint8Array
@@ -114,11 +122,12 @@ export function describeError(error: unknown): string {
 export async function runEpisode(
   item: OsworldCase,
   endpoint: ModelEndpoint,
-  { harness, repeat, signal, telemetry }: { harness: Harness, repeat: number, signal: AbortSignal, telemetry?: AgentTelemetry },
+  { exposure, harness, repeat, signal, telemetry }: { exposure: ToolExposure, harness: Harness, repeat: number, signal: AbortSignal, telemetry?: AgentTelemetry },
 ): Promise<EpisodeResult> {
   const kubeconfig = requiredEnvironment('OSWORLD_KUBECONFIG')
   const auvBinary = resolve(requiredEnvironment('OSWORLD_AUV_LINUX_BINARY'))
-  const macosAuvBinary = resolve(requiredEnvironment('OSWORLD_AUV_MACOS_BINARY'))
+  // The guest binary is shared; only the host MCP server differs between exposures.
+  const macosAuvBinary = resolve(requiredEnvironment(exposure === 'typed' ? 'OSWORLD_AUV_MACOS_BINARY_TYPED' : 'OSWORLD_AUV_MACOS_BINARY'))
   const binary = await guestFile(auvBinary, '/home/user/auv')
   // `scripts/build-auv-linux` writes the OCR runtime next to the binary.
   const runtime = await guestFile(`${auvBinary}.runtime.tar.gz`, '/home/user/auv-runtime.tar.gz')
@@ -128,14 +137,14 @@ export async function runEpisode(
   const podName = `osworld-${caseId.slice(0, 8)}-${randomBytes(3).toString('hex')}`
   const startedAt = new Date()
   // Provider-qualified opencode model ids (`opencode-go/x`) contain a slash.
-  const evidenceDirectory = join(packageDirectory, '.vieval', 'episodes', caseId, `${startedAt.toISOString().replaceAll(':', '-')}-${endpoint.model.replaceAll('/', '_')}-${harness}-r${repeat}`)
+  const evidenceDirectory = join(packageDirectory, '.vieval', 'episodes', caseId, `${startedAt.toISOString().replaceAll(':', '-')}-${endpoint.model.replaceAll('/', '_')}-${harness}-${exposure}-r${repeat}`)
   await mkdir(evidenceDirectory, { recursive: true })
   // `scripts/summarize.ts` aggregates these records, including errors that
   // never reached the evaluator, so the denominator stays honest.
   const maxSteps = Number(process.env.OSWORLD_MAX_STEPS ?? 15)
-  // Extra `auv mcp serve` flags, for example the MCP tool exposure under test.
-  const auvMcpFlags = (process.env.OSWORLD_AUV_MCP_FLAGS ?? '').split(' ').filter(Boolean)
-  const record = { api: endpoint.api, auvMcpFlags, auvRuntimeSha256: runtime.sha256, domain: item.domain, harness, maxSteps, model: endpoint.model, podName, repeat, startedAt: startedAt.toISOString(), taskId: caseId }
+  const auvMcpFlags = exposure === 'typed' ? ['--tool-exposure', 'typed'] : []
+  const auvMacosSha256 = createHash('sha256').update(await readFile(macosAuvBinary)).digest('hex')
+  const record = { api: endpoint.api, auvMacosSha256, auvMcpFlags, auvRuntimeSha256: runtime.sha256, auvToolExposure: exposure, domain: item.domain, harness, maxSteps, model: endpoint.model, podName, repeat, startedAt: startedAt.toISOString(), taskId: caseId }
 
   const kubectl = ['--kubeconfig', kubeconfig, '--namespace', cluster.namespace]
   const log = { caseId, podName }
@@ -180,7 +189,7 @@ export async function runEpisode(
       ? await runOpencodeAgent(item.task.instruction, endpoint.model, {
           args: ['--device-id', deviceId, 'mcp', 'serve', ...auvMcpFlags],
           command: macosAuvBinary,
-          cwd: join(evidenceDirectory, 'auv-runs'),
+          cwd: await opencodeAuvProject(evidenceDirectory),
           env: { AUV_CONFIG_PROFILES_FILE: profilesFile, HOME: process.env.HOME ?? '' },
         }, { evidenceDirectory, maxSteps, signal, telemetry })
       : await runAgent(harness, item.task.instruction, endpoint, auvTools!, { maxSteps, signal, telemetry })
@@ -207,6 +216,14 @@ export async function runEpisode(
       recordKubernetesResource({ action: 'delete', apiVersion: 'v1', caseId, exitCode: deleted.exitCode, kind: 'Pod', name: podName, namespace: cluster.namespace, outcome: deleted.exitCode === 0 ? 'succeeded' : 'failed' })
     }
   }
+}
+
+/** Validates a run-matrix `exposure` value. */
+export function toolExposureFrom(value: unknown): ToolExposure {
+  if (value === 'compact' || value === 'typed') {
+    return value
+  }
+  throw new Error(`OSWORLD_AUV_TOOL_EXPOSURE must list "compact" or "typed", got ${JSON.stringify(value)}.`)
 }
 
 function assertExecuteSucceeded(result: ExecuteResponse, action: string): void {
@@ -398,6 +415,22 @@ async function installAuv(
     await sleepWithAbort(1_000, signal)
   }
   throw new Error('Guest-local AUV daemon did not create its Unix socket within 60 seconds.')
+}
+
+/**
+ * Working directory for the AUV MCP server that opencode spawns.
+ *
+ * NOTICE: opencode starts `auv mcp serve` itself, so the eval cannot pass a
+ * per-call `store_root`, and the server stores Runs in `<cwd>/.auv/store`.
+ * Linking that path to `auv-runs` keeps the layout the Vieval OSWorld viewer
+ * and `SKILL.md` read (`auv-runs/records.jsonl`, `auv-runs/artifacts/`).
+ */
+async function opencodeAuvProject(evidenceDirectory: string): Promise<string> {
+  const project = join(evidenceDirectory, 'auv-project')
+  await mkdir(join(project, '.auv'), { recursive: true })
+  await mkdir(join(evidenceDirectory, 'auv-runs'), { recursive: true })
+  await symlink(join('..', '..', 'auv-runs'), join(project, '.auv', 'store'))
+  return project
 }
 
 /** Pairs the host AUV client with the guest daemon and returns the device id. */
