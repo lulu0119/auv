@@ -57,6 +57,7 @@ interface McpCallResult {
 }
 
 interface OpencodeEvent {
+  error?: unknown
   part?: {
     id?: string
     state?: { input?: unknown }
@@ -101,7 +102,7 @@ export async function runAgent(
   const tapFile = join(options.evidenceDirectory, 'auv-mcp-tap.jsonl')
   const decisionFile = join(root, 'decision.json')
   const result: AgentResult = { modelRequests: 0, runIds: [], steps: [], usage: {} }
-  const details = { exitCode: undefined as number | undefined, startupRetries: 0, toolUses: {} as Record<string, number> }
+  const details = { errors: [] as string[], exitCode: undefined as number | undefined, startupRetries: 0, stopReason: undefined as string | undefined, toolUses: {} as Record<string, number> }
   try {
     const work = join(root, 'work')
     await mkdir(work, { recursive: true })
@@ -125,7 +126,14 @@ export async function runAgent(
     result.steps = tapped.steps
     result.runIds = tapped.runIds
     result.lastAction = await readFile(decisionFile, 'utf8').then(text => (JSON.parse(text) as { action: 'DONE' | 'FAIL' }).action, () => undefined)
-    if (details.exitCode !== 0) {
+    // NOTICE: At the step limit opencode sends one closing request with
+    // `tool_choice: "none"`, which OpenCode Go's Muse Spark rejects with 400
+    // ("only auto is supported"). That is an exhausted step budget, as
+    // reaching OSWORLD_MAX_STEPS is for the other harnesses, not an error.
+    if (details.exitCode !== 0 && (result.modelRequests ?? 0) >= options.maxSteps - 1 && details.errors.some(error => error.includes('tool_choice'))) {
+      details.stopReason = 'step_budget'
+    }
+    else if (details.exitCode !== 0) {
       throw new Error(`opencode exited with ${String(details.exitCode)}; see opencode.stderr.log.`)
     }
     return { ...result, harness: details }
@@ -138,6 +146,9 @@ export async function runAgent(
   }
 }
 
+/** opencode 2.2.2 built-in tools; only `execute` (Code Mode) stays allowed. */
+const builtinTools = ['shell', 'bash', 'edit', 'write', 'patch', 'read', 'list', 'glob', 'grep', 'lsp', 'webfetch', 'websearch', 'task', 'todowrite', 'todoread', 'skill', 'question']
+
 function opencodeConfig(model: string, maxSteps: number, auv: AuvMcpLaunch, tapFile: string, decisionFile: string): Record<string, unknown> {
   return {
     agents: {
@@ -147,7 +158,9 @@ function opencodeConfig(model: string, maxSteps: number, auv: AuvMcpLaunch, tapF
         model,
         // NOTICE: The agent acts only through MCP tools. Shell, file, and web
         // tools would bypass AUV, as `pyautogui` would in upstream OSWorld.
-        permissions: ['shell', 'edit', 'write', 'read', 'webfetch', 'websearch', 'task'].map(action => ({ action, effect: 'deny', resource: '*' })),
+        // The 2026-10-30 smoke still reached `glob` and `grep`, so every built-in
+        // tool except Code Mode's `execute` is denied.
+        permissions: builtinTools.map(action => ({ action, effect: 'deny', resource: '*' })),
         steps: maxSteps,
         system: systemPrompt,
       },
@@ -181,7 +194,7 @@ async function runOnce(
   model: string,
   attempt: number,
   result: AgentResult,
-  details: { exitCode: number | undefined, toolUses: Record<string, number> },
+  details: { errors: string[], exitCode: number | undefined, toolUses: Record<string, number> },
   options: { evidenceDirectory: string, signal: AbortSignal, telemetry?: AgentTelemetry },
 ): Promise<'stalled' | 'started'> {
   const state = join(root, `state-${String(attempt)}`)
@@ -241,6 +254,9 @@ async function runOnce(
       const tool = event.part?.tool ?? 'unknown'
       details.toolUses[tool] = (details.toolUses[tool] ?? 0) + 1
       calls.push({ arguments: JSON.stringify(event.part?.state?.input ?? {}), callId: event.part?.id ?? '', name: tool })
+    }
+    else if (event.type === 'error') {
+      details.errors.push(JSON.stringify(event.error ?? {}).slice(0, 500))
     }
     else if (event.type === 'step_finish') {
       result.modelRequests = (result.modelRequests ?? 0) + 1

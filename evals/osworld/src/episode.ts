@@ -67,6 +67,12 @@ const guestAuvPort = 9847
 // screen). OSWORLD_EVALUATION_SETTLE_SECONDS overrides it.
 const evaluationSettleMs = Number(process.env.OSWORLD_EVALUATION_SETTLE_SECONDS ?? 20) * 1000
 
+// Wait between setup and the agent's first step, as upstream
+// `lib_run_single.py` does ("Wait for the environment to be ready", 60 s).
+// Starting at once showed the agent a blank screen while Chrome was still
+// launching (2026-10-30 smoke). OSWORLD_SETUP_SETTLE_SECONDS overrides it.
+const setupSettleMs = Number(process.env.OSWORLD_SETUP_SETTLE_SECONDS ?? 60) * 1000
+
 /**
  * The AUV MCP tool exposure under test, a run-matrix axis
  * (`OSWORLD_AUV_TOOL_EXPOSURE`): `compact` serves the `invoke` tool from
@@ -185,6 +191,7 @@ export async function runEpisode(
     if (setup.ok !== true) {
       throw new Error(`OSWorld setup failed for ${caseId}.`)
     }
+    await sleepWithAbort(setupSettleMs, signal)
     agent = harness === 'opencode'
       ? await runOpencodeAgent(item.task.instruction, endpoint.model, {
           args: ['--device-id', deviceId, 'mcp', 'serve', ...auvMcpFlags],
