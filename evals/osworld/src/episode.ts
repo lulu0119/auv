@@ -524,7 +524,9 @@ function podManifest(podName: string, caseId: string): Record<string, unknown> {
         // guest reaches its setup API. Operators add this label only after a
         // live episode probe; adding automatic qualification is deferred until
         // the cluster has a reusable node-conformance controller.
-        'auv.moeru.ai/osworld-ready': 'true',
+        // `OSWORLD_NODE` pins episodes to one named KVM node instead, without
+        // changing cluster labels; its first episode is that live probe.
+        ...(process.env.OSWORLD_NODE ? { 'kubernetes.io/hostname': process.env.OSWORLD_NODE } : { 'auv.moeru.ai/osworld-ready': 'true' }),
         'feature.node.kubernetes.io/kvm': 'true',
         'kubernetes.io/arch': 'amd64',
       },
