@@ -13,12 +13,34 @@ pub struct McpArgs {
 #[derive(Clone, Debug, Subcommand)]
 pub enum McpCommand {
   /// Serve MCP over standard input and output.
-  Serve,
+  Serve(McpServeArgs),
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct McpServeArgs {
+  /// How AUV commands appear as MCP tools (experimental). `compact` lists one
+  /// `invoke` tool with the command catalog in its description; `typed` lists
+  /// one tool per command with typed arguments.
+  #[arg(long, value_enum, default_value_t = ToolExposure::Compact)]
+  pub tool_exposure: ToolExposure,
+}
+
+/// The MCP tool shape of the invoke registry.
+///
+/// TODO(mcp-typed-tools): provisional names for the MCP tool exposure
+/// benchmark; settle them, or drop `typed`, when the owner accepts a result.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum ToolExposure {
+  /// One `invoke` tool; commands and their `inputs` are listed in its description.
+  #[default]
+  Compact,
+  /// One tool per command (`window.list` -> `window_list`) with typed arguments.
+  Typed,
 }
 
 pub async fn run(args: McpArgs, selection: &auv::selection::RootSelection, project_root: &std::path::Path) -> Result<i32, String> {
   match args.command {
-    McpCommand::Serve => frontend::serve_stdio(project_root.to_path_buf(), selection.clone()).await?,
+    McpCommand::Serve(serve) => frontend::serve_stdio(project_root.to_path_buf(), selection.clone(), serve.tool_exposure).await?,
   }
   Ok(0)
 }
@@ -153,6 +175,8 @@ mod frontend {
     op_executor: Arc<dyn OperationExecutor>,
     /// Root `--device`, `--device-id`, and `--run` for `invoke` calls that select no Device.
     default_selection: auv::selection::RootSelection,
+    /// Whether `tools/list` shows one `invoke` tool or one typed tool per command.
+    tool_exposure: super::ToolExposure,
     /// Image receipts returned by this MCP server instance, shared with its worker threads.
     image_artifacts: Arc<super::artifact_image::ImageArtifacts>,
     /// Shared admission slots for queued or running image workers.
@@ -193,6 +217,7 @@ mod frontend {
         invoke_dispatch,
         op_executor: default_executor(),
         default_selection: auv::selection::RootSelection::default(),
+        tool_exposure: super::ToolExposure::Compact,
         image_artifacts: Arc::new(super::artifact_image::ImageArtifacts::default()),
         image_read_slots: Arc::new(tokio::sync::Semaphore::new(MAX_IMAGE_READS)),
       })
@@ -201,6 +226,12 @@ mod frontend {
     /// Routes `invoke` calls without their own Device fields through `selection`.
     pub fn with_default_selection(mut self, selection: auv::selection::RootSelection) -> Self {
       self.default_selection = selection;
+      self
+    }
+
+    /// Lists one typed tool per command instead of the compact `invoke` tool.
+    pub fn with_tool_exposure(mut self, tool_exposure: super::ToolExposure) -> Self {
+      self.tool_exposure = tool_exposure;
       self
     }
 
@@ -741,6 +772,14 @@ mod frontend {
       context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
       let cancellation = InvokeCancellation::from_token(context.ct.clone());
+      // Typed command tools run through the same `invoke` path as compact calls.
+      // NOTICE: `invoke` itself stays routable in typed mode though unlisted.
+      if self.tool_exposure == super::ToolExposure::Typed
+        && let Some(invoke_request) = typed::invoke_request(self.invoke_registry.as_ref(), &request.name, request.arguments.clone())
+      {
+        let invoke_request = invoke_request?;
+        return MCP_REQUEST_CANCELLATION.scope(cancellation, self.invoke(Parameters(invoke_request))).await;
+      }
       let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
       MCP_REQUEST_CANCELLATION.scope(cancellation, self.tool_router.call(tcc)).await
     }
@@ -751,7 +790,10 @@ mod frontend {
       _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
       let mut tools = self.tool_router.list_all();
-      if let Some(invoke_tool) = tools.iter_mut().find(|tool| tool.name == "invoke") {
+      if self.tool_exposure == super::ToolExposure::Typed {
+        tools.retain(|tool| tool.name != "invoke");
+        tools.extend(typed::tools(self.invoke_registry.as_ref()));
+      } else if let Some(invoke_tool) = tools.iter_mut().find(|tool| tool.name == "invoke") {
         invoke_tool.input_schema = invoke_tool_input_schema_for_registry(self.invoke_registry.as_ref());
         invoke_tool.description = Some(invoke_tool_description(self.invoke_registry.as_ref()).into());
       }
@@ -808,23 +850,24 @@ mod frontend {
     Arc::new(schema)
   }
 
-  /// Renders the command catalog into the `invoke` description.
-  ///
-  /// NOTICE: Model clients render tool definitions from standard JSON Schema
-  /// keys; the `x-auv-commands` extension never reached the model (an OSWorld
-  /// request cost the same input tokens with or without it), so agents guessed
-  /// `inputs` keys. The description is the one field every client shows.
-  fn invoke_tool_description(registry: &InvokeRegistry) -> String {
-    let mut text = String::from(
-      "Invoke one AUV command and record it as a Run. Set `command_id` to one command below and \
+  // Shared guidance for AUV commands. The compact `invoke` description joins
+  // every section; typed per-command tools carry the sections that apply to
+  // each command (see `typed::tools`). Sections name `inputs.<key>` and
+  // command ids as the compact catalog spells them.
+  /// How one compact `invoke` call names its command, inputs, and target.
+  const INVOKE_CALL_NOTE: &str = "Invoke one AUV command and record it as a Run. Set `command_id` to one command below and \
        pass its arguments in `inputs` as string values, keyed exactly as listed; list values are JSON array strings. \
-       Set `target` only where a command accepts one. `support` names the platforms whose source has a path for the \
+       Set `target` only where a command accepts one.";
+  /// What the per-command `support` lines and a `recording_failure` mean.
+  const SUPPORT_NOTE: &str = "`support` names the platforms whose source has a path for the \
        command, and `runner support` states the same for the selected-Runner route when it differs; neither is a \
-       claim that the path was run. A `recording_failure` preserves the command result but omits artifact receipts.\n\n\
-       Application ids are the ones `window.list` reports on this Device, and they differ by platform: a bundle id \
+       claim that the path was run. A `recording_failure` preserves the command result but omits artifact receipts.";
+  /// Which application ids targets take on each platform.
+  const APPLICATION_IDS_NOTE: &str = "Application ids are the ones `window.list` reports on this Device, and they differ by platform: a bundle id \
        on macOS (com.google.Chrome), the executable name on Windows (chrome.exe), the AT-SPI \
-       application id on Linux Wayland (org.gnome.TextEditor), and the GTK id or WM_CLASS on X11 (google-chrome). Examples below use macOS ids; run `window.list` instead of guessing.\n\n\
-       Points: with an app or window `target`, point coordinates are window-local unless `inputs.relative-to` is \
+       application id on Linux Wayland (org.gnome.TextEditor), and the GTK id or WM_CLASS on X11 (google-chrome). Examples below use macOS ids; run `window.list` instead of guessing.";
+  /// Point coordinate bases and how capture pixels map to screen points.
+  const POINTS_NOTE: &str = "Points: with an app or window `target`, point coordinates are window-local unless `inputs.relative-to` is \
        `screen`. Fetch image receipts with `artifact_read_image`, using `run_id` and `artifact_id` from `artifacts[].uri`; \
        `file_path` refers to the server filesystem. Evidence from `display.capture`, `window.capture`, and \
        `screen.captureRegion` is stored at logical resolution. For a returned PNG pixel `(px, py)`, the screen point is \
@@ -832,8 +875,9 @@ mod frontend {
        Use `capture.bounds.x` and `capture.bounds.y` from that artifact's attributes. `source_width`/`source_height` are \
        stored artifact dimensions; `width`/`height` are returned PNG dimensions. Do not divide by the capture's scale factor again. \
        Send a screen point without `target`, or with `target` and \
-       `relative-to: screen`.\n\n\
-       Input delivery: `inputs.input-policy` decides how input reaches a target window. Leave it unset unless an \
+       `relative-to: screen`.";
+  /// How `input-policy` delivers input to a target window.
+  const INPUT_DELIVERY_NOTE: &str = "Input delivery: `inputs.input-policy` decides how input reaches a target window. Leave it unset unless an \
        action had no visible effect. Delivery never proves the app reacted; check with a capture.\n\
        - background-preferred (default for click, drag and scroll on a window target): send input to the window \
        without raising it or moving the real pointer. An inactive or covered app can ignore it.\n\
@@ -843,8 +887,17 @@ mod frontend {
        user's foreground must not change.\n\
        Platforms: Linux focuses the target window and sends all input to the foreground; background-only fails. \
        Windows sends background pointer input as window messages, which some toolkits ignore. On Windows and \
-       Linux, keyboard commands type into the focused window only.\n\nCommands:",
-    );
+       Linux, keyboard commands type into the focused window only.";
+
+  /// Renders the command catalog into the `invoke` description.
+  ///
+  /// NOTICE: Model clients render tool definitions from standard JSON Schema
+  /// keys; the `x-auv-commands` extension never reached the model (an OSWorld
+  /// request cost the same input tokens with or without it), so agents guessed
+  /// `inputs` keys. The description is the one field every client shows.
+  fn invoke_tool_description(registry: &InvokeRegistry) -> String {
+    let mut text =
+      format!("{INVOKE_CALL_NOTE} {SUPPORT_NOTE}\n\n{APPLICATION_IDS_NOTE}\n\n{POINTS_NOTE}\n\n{INPUT_DELIVERY_NOTE}\n\nCommands:");
     for command in registry.all() {
       text.push_str(&format!("\n\n{}: {}", command.id, command.description));
       match command.role {
@@ -1158,8 +1211,12 @@ mod frontend {
     McpError::invalid_params(message.to_string(), None::<Value>)
   }
 
-  pub async fn serve_stdio(project_root: PathBuf, selection: auv::selection::RootSelection) -> Result<(), String> {
-    serve_server(McpServer::new(project_root)?.with_default_selection(selection)).await
+  pub async fn serve_stdio(
+    project_root: PathBuf,
+    selection: auv::selection::RootSelection,
+    tool_exposure: super::ToolExposure,
+  ) -> Result<(), String> {
+    serve_server(McpServer::new(project_root)?.with_default_selection(selection).with_tool_exposure(tool_exposure)).await
   }
 
   /// Serve MCP stdio with explicit invoke metadata and shared typed commands.
@@ -1177,6 +1234,10 @@ mod frontend {
   async fn serve_server(server: McpServer) -> Result<(), String> {
     let service = server.serve(stdio()).await.map_err(|error| format!("failed to serve MCP stdio transport: {error}"))?;
     service.waiting().await.map(|_| ()).map_err(|error| format!("mcp stdio server exited with error: {error}"))
+  }
+
+  mod typed {
+    include!("mcp_typed.rs");
   }
 
   #[cfg(test)]
