@@ -517,7 +517,8 @@ function podManifest(podName: string, caseId: string): Record<string, unknown> {
         imagePullPolicy: 'IfNotPresent',
         name: 'qemu',
         resources: {
-          limits: { cpu: '8', memory: '12Gi' },
+          // OSWORLD_POD_CPU_LIMIT bounds QEMU on a shared node; the guest keeps CPU_CORES.
+          limits: { cpu: process.env.OSWORLD_POD_CPU_LIMIT || '8', memory: '12Gi' },
           requests: { cpu: '5m', memory: '8Gi' },
         },
         securityContext: { privileged: true },
