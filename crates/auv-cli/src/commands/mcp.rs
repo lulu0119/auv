@@ -822,8 +822,8 @@ mod frontend {
        command, and `runner support` states the same for the selected-Runner route when it differs; neither is a \
        claim that the path was run. A `recording_failure` preserves the command result but omits artifact receipts.\n\n\
        Application ids are the ones `window.list` reports on this Device, and they differ by platform: a bundle id \
-       on macOS (com.google.Chrome), the executable name on Windows (chrome.exe), and the AT-SPI \
-       application id on Linux (org.gnome.TextEditor). Examples below use macOS ids; run `window.list` instead of guessing.\n\n\
+       on macOS (com.google.Chrome), the executable name on Windows (chrome.exe), the AT-SPI \
+       application id on Linux Wayland (org.gnome.TextEditor), and the GTK id or WM_CLASS on X11 (google-chrome). Examples below use macOS ids; run `window.list` instead of guessing.\n\n\
        Points: with an app or window `target`, point coordinates are window-local unless `inputs.relative-to` is \
        `screen`. Fetch image receipts with `artifact_read_image`, using `run_id` and `artifact_id` from `artifacts[].uri`; \
        `file_path` refers to the server filesystem. Evidence from `display.capture`, `window.capture`, and \

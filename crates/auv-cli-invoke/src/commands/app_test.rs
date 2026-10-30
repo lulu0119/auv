@@ -191,7 +191,10 @@ fn activation_report_renders_each_window_observation_as_its_own_fact() {
 fn linux_activation_reaches_the_invoke_caller_as_unsupported() {
   // The Linux facade and a Linux Runner both produce this driver error; the
   // in-process handler converts it with `?` and must keep the category.
-  for kind in [auv_driver::ApplicationIdKind::DesktopAppId] {
+  for kind in [
+    auv_driver::ApplicationIdKind::DesktopAppId,
+    auv_driver::ApplicationIdKind::WmClass,
+  ] {
     let failure = crate::InvokeFailure::from(auv_driver::application::unsupported_activation(kind));
     assert_eq!(failure.code, crate::FailureCode::Unsupported);
     assert!(failure.message.contains("Linux"), "{}", failure.message);
