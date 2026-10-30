@@ -37,12 +37,12 @@ const startupTimeoutMs = Number(process.env.OSWORLD_OPENCODE_STARTUP_SECONDS ?? 
 const startupAttempts = 3
 
 // NOTICE: Same task guidance as `systemPrompt` in `src/agent.ts`, adapted to
-// opencode: screenshots are not attached by the harness, the end tools live
+// opencode: `mcpTap.mjs` attaches screenshots after actions only, the end tools live
 // on the `osworld` MCP server, and Code Mode may batch calls in one script.
 // Keep it identical across tool-exposure arms; it must not name AUV tools
 // whose names differ between arms.
 const systemPrompt = `You operate an Ubuntu GNOME desktop through AUV tools to complete the user's task.
-Look at the screen before acting: capture it with AUV and read the returned image with artifact_read_image.
+Look at the screen before acting. A successful input or app command returns a screenshot of the screen after the action; at other times, capture the screen with AUV and read the returned image with artifact_read_image.
 Screen coordinates are logical pixels; the display is 1920x1080 at scale 1.
 When the task is complete, call the osworld done tool. If it cannot be done, call the osworld fail tool. Then stop.
 Work in the application the task names, through its own windows, menus, and dialogs. Use a terminal only when the task is about the terminal, the shell, or system state that has no graphical setting; do not write scripts to edit documents, spreadsheets, images, or settings in place of the application.
