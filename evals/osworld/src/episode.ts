@@ -13,6 +13,7 @@ import { errorCauseFrom, errorMessageFrom, errorStackFrom, sleepWithAbort } from
 
 import { AgentRunError } from './agent'
 import { runAgent } from './agents'
+import { runAgent as runOpencodeAgent } from './agents/opencode/runAgent'
 import { startAuvTools } from './auvTools'
 import { packageDirectory } from './cases'
 import { observeGuestCommand, recordKubernetesResource, runLoggedCommand, startLoggedCommand } from './executionLog'
@@ -126,12 +127,15 @@ export async function runEpisode(
   const caseId = item.task.id
   const podName = `osworld-${caseId.slice(0, 8)}-${randomBytes(3).toString('hex')}`
   const startedAt = new Date()
-  const evidenceDirectory = join(packageDirectory, '.vieval', 'episodes', caseId, `${startedAt.toISOString().replaceAll(':', '-')}-${endpoint.model}-${harness}-r${repeat}`)
+  // Provider-qualified opencode model ids (`opencode-go/x`) contain a slash.
+  const evidenceDirectory = join(packageDirectory, '.vieval', 'episodes', caseId, `${startedAt.toISOString().replaceAll(':', '-')}-${endpoint.model.replaceAll('/', '_')}-${harness}-r${repeat}`)
   await mkdir(evidenceDirectory, { recursive: true })
   // `scripts/summarize.ts` aggregates these records, including errors that
   // never reached the evaluator, so the denominator stays honest.
   const maxSteps = Number(process.env.OSWORLD_MAX_STEPS ?? 15)
-  const record = { api: endpoint.api, auvRuntimeSha256: runtime.sha256, domain: item.domain, harness, maxSteps, model: endpoint.model, podName, repeat, startedAt: startedAt.toISOString(), taskId: caseId }
+  // Extra `auv mcp serve` flags, for example the MCP tool exposure under test.
+  const auvMcpFlags = (process.env.OSWORLD_AUV_MCP_FLAGS ?? '').split(' ').filter(Boolean)
+  const record = { api: endpoint.api, auvMcpFlags, auvRuntimeSha256: runtime.sha256, domain: item.domain, harness, maxSteps, model: endpoint.model, podName, repeat, startedAt: startedAt.toISOString(), taskId: caseId }
 
   const kubectl = ['--kubeconfig', kubeconfig, '--namespace', cluster.namespace]
   const log = { caseId, podName }
@@ -155,24 +159,31 @@ export async function runEpisode(
 
     await installAuv(setupEndpoint, binary, runtime, log, signal)
     const deviceId = await pairAuv(setupEndpoint, macosAuvBinary, ports.auv, profilesFile, log, signal)
-    auvTools = await startAuvTools({
-      context: log,
-      deviceId,
-      env: { ...process.env, AUV_CONFIG_PROFILES_FILE: profilesFile },
-      executable: macosAuvBinary,
-      stderrFile: join(evidenceDirectory, 'auv-mcp.stderr.log'),
-      storeRoot: join(evidenceDirectory, 'auv-runs'),
-    }, signal)
+    // opencode spawns the AUV MCP server itself; the other harnesses share one in-process client.
+    if (harness !== 'opencode') {
+      auvTools = await startAuvTools({
+        args: auvMcpFlags,
+        context: log,
+        deviceId,
+        env: { ...process.env, AUV_CONFIG_PROFILES_FILE: profilesFile },
+        executable: macosAuvBinary,
+        stderrFile: join(evidenceDirectory, 'auv-mcp.stderr.log'),
+        storeRoot: join(evidenceDirectory, 'auv-runs'),
+      }, signal)
+    }
 
     const setup = await bridge('setup', item, ports, evidenceDirectory, undefined, log, signal)
     if (setup.ok !== true) {
       throw new Error(`OSWorld setup failed for ${caseId}.`)
     }
-    agent = await runAgent(harness, item.task.instruction, endpoint, auvTools, {
-      maxSteps,
-      signal,
-      telemetry,
-    })
+    agent = harness === 'opencode'
+      ? await runOpencodeAgent(item.task.instruction, endpoint.model, {
+          args: ['--device-id', deviceId, 'mcp', 'serve', ...auvMcpFlags],
+          command: macosAuvBinary,
+          cwd: join(evidenceDirectory, 'auv-runs'),
+          env: { AUV_CONFIG_PROFILES_FILE: profilesFile, HOME: process.env.HOME ?? '' },
+        }, { evidenceDirectory, maxSteps, signal, telemetry })
+      : await runAgent(harness, item.task.instruction, endpoint, auvTools!, { maxSteps, signal, telemetry })
     // Let applications persist state before the evaluator reads it; see `evaluationSettleMs`.
     await sleepWithAbort(evaluationSettleMs, signal)
     const evaluation = await bridge('evaluate', item, ports, evidenceDirectory, agent.lastAction, log, signal)

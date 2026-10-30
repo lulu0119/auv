@@ -1,6 +1,8 @@
 import { sleepWithAbort } from '@moeru/std'
 
 export interface AgentResult {
+  /** Harness-specific run facts, such as opencode startup retries and tool-use counts. */
+  harness?: Record<string, unknown>
   /** `DONE` or `FAIL` when the model ended the episode, as OSWorld expects. */
   lastAction?: 'DONE' | 'FAIL'
   /** Model replies received, including retries' final successes only. */

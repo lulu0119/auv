@@ -46,10 +46,10 @@ const evalOwnedFields = ['device_id', 'device_name', 'dry_run', 'store_root']
  * model; AUV itself stays text-only so non-vision clients pay nothing.
  */
 export async function startAuvTools(
-  server: Omit<McpServerProcess, 'args'> & { deviceId: string, storeRoot: string },
+  server: Omit<McpServerProcess, 'args'> & { args?: string[], deviceId: string, storeRoot: string },
   signal: AbortSignal,
 ): Promise<AuvTools> {
-  const client = await McpStdioClient.start({ ...server, args: ['--device-id', server.deviceId, 'mcp', 'serve'] }, signal)
+  const client = await McpStdioClient.start({ ...server, args: ['--device-id', server.deviceId, 'mcp', 'serve', ...(server.args ?? [])] }, signal)
   try {
     const definitions = (await client.listTools(signal)).filter(tool => exposedTools.has(tool.name)).map(functionTool)
     return {
