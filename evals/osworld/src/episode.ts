@@ -399,7 +399,7 @@ async function installAuv(
     'rm -rf /home/user/auv-runtime && mkdir -p /home/user/auv-runtime',
     `tar -xzf ${runtime.guestPath} -C /home/user/auv-runtime`,
     'rm -f /home/user/auv.sock',
-    `nohup env DISPLAY=:0 XDG_SESSION_TYPE=x11 TESSDATA_PREFIX=/home/user/auv-runtime/tessdata ${binary.guestPath} serve --listen unix:///home/user/auv.sock --listen http://0.0.0.0:${guestAuvPort} --pairing-store /home/user/.local/share/auv-osworld/pairings.json --store-root /home/user/.local/share/auv-osworld --no-register </dev/null >/tmp/auv.log 2>&1 &`,
+    `nohup env DISPLAY=:0 XDG_SESSION_TYPE=x11 TESSDATA_PREFIX=/home/user/auv-runtime/tessdata ${binary.guestPath} serve --local-socket /home/user/auv.sock --remote-bind 0.0.0.0:${guestAuvPort} --pairing-store /home/user/.local/share/auv-osworld/pairings.json --store-root /home/user/.local/share/auv-osworld --no-register </dev/null >/tmp/auv.log 2>&1 &`,
   ].join(' && ')
   const launch = await observeGuestCommand('/bin/sh', ['-c', launchCommand], { ...log, tool: 'auv' }, async () => await execute(endpoint, {
     command: launchCommand,
